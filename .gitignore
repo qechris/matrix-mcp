@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Local Matrix session/credentials
+matrix-mcp-session.json
+*.session.json
+.env
+
+# Build/check logs
+check.log
+build.log

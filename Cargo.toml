@@ -1,0 +1,48 @@
+[package]
+name = "matrix-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "A Model Context Protocol (MCP) server for the Matrix chat protocol, built on the official Rust SDKs (rmcp + matrix-sdk)."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/qa-chrisb/matrix-mcp"
+keywords = ["matrix", "mcp", "model-context-protocol", "chat", "llm"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+# Official MCP Rust SDK: server runtime + stdio and streamable-HTTP/SSE
+# transports + #[tool] macros.
+rmcp = { version = "1.7", features = [
+    "server",
+    "transport-io",
+    "transport-streamable-http-server",
+    "macros",
+] }
+# HTTP server for the SSE-based streamable-HTTP transport (matches the axum
+# version rmcp builds against).
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+# Official Matrix Rust SDK. Default features are disabled to keep the build
+# light and avoid native deps (OpenSSL, sqlite); rustls handles TLS and the
+# markdown feature enables formatted messages.
+matrix-sdk = { version = "=0.16.1", default-features = false, features = [
+    "rustls-tls",
+    "markdown",
+] }
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "signal",
+    "fs",
+    "io-std",
+    "sync",
+    "time",
+    "net",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+strip = true
