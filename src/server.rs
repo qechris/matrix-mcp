@@ -131,7 +131,8 @@ impl MatrixServer {
     }
 
     #[tool(description = "Read the most recent messages from a room, in chronological order. \
-        Note: messages in end-to-end encrypted rooms cannot be decrypted by this server.")]
+        End-to-end encrypted messages are decrypted automatically when the keys are available; \
+        any that cannot be decrypted are flagged with unable_to_decrypt=true.")]
     async fn read_messages(
         &self,
         Parameters(args): Parameters<ReadMessagesArgs>,
@@ -162,8 +163,10 @@ impl ServerHandler for MatrixServer {
             .with_instructions(
                 "Matrix MCP server. Tools let you log in to a Matrix homeserver, list joined \
                  rooms, read and send messages, and join rooms. Start with `whoami` to check the \
-                 login state, then `login` if needed. End-to-end encrypted rooms are listed but \
-                 their message contents cannot be decrypted by this server.",
+                 login state, then `login` if needed. End-to-end encryption is supported: \
+                 messages are encrypted and decrypted automatically using a persistent key store. \
+                 Decrypting older history may require running `sync` so the device receives room \
+                 keys; messages with no available key are flagged unable_to_decrypt.",
             );
         info.server_info.name = env!("CARGO_PKG_NAME").to_string();
         info.server_info.version = env!("CARGO_PKG_VERSION").to_string();

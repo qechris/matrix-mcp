@@ -36,6 +36,7 @@ can also authenticate at runtime with the `login` tool.
 | `MATRIX_PASSWORD`    | Password for automatic login at startup. |
 | `MATRIX_DEVICE_NAME` | Device display name (default `matrix-mcp`). |
 | `MATRIX_SESSION_FILE`| Path to persist the session (default: `$XDG_STATE_HOME/matrix-mcp/session.json`, falling back to `~/.local/state/matrix-mcp/session.json`). |
+| `MATRIX_STORE_PATH`  | Directory for the SQLite crypto/state store, where E2EE keys and room state persist (default: a `store` directory next to the session file). |
 | `MATRIX_MCP_TRANSPORT` | Transport to serve: `stdio` (default) or `http`/`sse`. |
 | `MATRIX_MCP_ADDRESS` | Bind address for the HTTP/SSE transport (default `127.0.0.1:8000`). |
 | `MATRIX_MCP_PATH`    | URL path for the HTTP/SSE endpoint (default `/mcp`). |
@@ -69,9 +70,9 @@ MATRIX_MCP_PATH=/mcp \
 cargo build --release
 ```
 
-The binary is written to `target/release/matrix-mcp`. Default `matrix-sdk`
-features are disabled to keep the build lightweight (rustls for TLS, no native
-OpenSSL/sqlite).
+The binary is written to `target/release/matrix-mcp`. `matrix-sdk` is built with
+rustls (no OpenSSL), end-to-end encryption, and a bundled SQLite store (compiled
+from source, so a C compiler is required for the build).
 
 ## Use with an MCP client
 
@@ -103,15 +104,27 @@ Or, equivalently, an entry in an MCP `servers` configuration:
 }
 ```
 
+## End-to-end encryption
+
+E2EE is enabled. The server encrypts outgoing messages in encrypted rooms and
+decrypts incoming ones automatically, using a persistent SQLite crypto store
+(`MATRIX_STORE_PATH`) so device and room keys survive restarts.
+
+A few practical notes:
+
+- The store directory holds your encryption keys — treat it like a credential
+  and keep it private.
+- You can only decrypt messages for which the device has the keys. Running the
+  `sync` tool lets the device receive room keys (and `automatic-room-key-forwarding`
+  requests missing ones); messages with no available key are returned with
+  `unable_to_decrypt: true`.
+- This build does not perform interactive device verification or cross-signing,
+  so other users may see this device as unverified.
+
 ## Limitations
 
-- **End-to-end encryption is not enabled.** Encrypted rooms are listed (and
-  flagged via their encryption state), but their message contents cannot be
-  decrypted or sent encrypted. This keeps the dependency footprint and build
-  small. E2EE support could be added by enabling the `matrix-sdk`
-  `e2e-encryption` feature.
-- Session state is kept in memory plus a persisted access token; room history is
-  fetched on demand rather than cached locally.
+- Room history is fetched on demand rather than cached into a local timeline.
+- No interactive device verification / cross-signing (see above).
 
 ## License
 

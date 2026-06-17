@@ -21,12 +21,15 @@ rmcp = { version = "1.7", features = [
 # HTTP server for the SSE-based streamable-HTTP transport (matches the axum
 # version rmcp builds against).
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
-# Official Matrix Rust SDK. Default features are disabled to keep the build
-# light and avoid native deps (OpenSSL, sqlite); rustls handles TLS and the
-# markdown feature enables formatted messages.
+# Official Matrix Rust SDK. rustls for TLS, markdown for formatted messages,
+# end-to-end encryption with automatic room-key forwarding, and a bundled
+# SQLite store so crypto keys and room state persist across restarts.
 matrix-sdk = { version = "=0.16.1", default-features = false, features = [
     "rustls-tls",
     "markdown",
+    "e2e-encryption",
+    "automatic-room-key-forwarding",
+    "bundled-sqlite",
 ] }
 tokio = { version = "1", features = [
     "macros",

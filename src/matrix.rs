@@ -42,6 +42,7 @@ pub struct MatrixManager {
     env_password: Option<String>,
     device_name: String,
     session_path: PathBuf,
+    store_path: PathBuf,
     client: RwLock<Option<Client>>,
 }
 
@@ -53,6 +54,8 @@ impl MatrixManager {
     /// * `MATRIX_PASSWORD`    - password for optional auto-login
     /// * `MATRIX_DEVICE_NAME` - display name for this device (default `matrix-mcp`)
     /// * `MATRIX_SESSION_FILE`- where to persist the session (default under XDG state dir)
+    /// * `MATRIX_STORE_PATH`  - directory for the SQLite crypto/state store
+    ///   (default: a `store` directory next to the session file)
     pub fn from_env() -> Result<Self> {
         let non_empty = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
 
@@ -63,6 +66,9 @@ impl MatrixManager {
         let session_path = non_empty("MATRIX_SESSION_FILE")
             .map(PathBuf::from)
             .unwrap_or_else(default_session_path);
+        let store_path = non_empty("MATRIX_STORE_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| default_store_path(&session_path));
 
         Ok(Self {
             default_homeserver,
@@ -70,14 +76,19 @@ impl MatrixManager {
             env_password,
             device_name,
             session_path,
+            store_path,
             client: RwLock::new(None),
         })
     }
 
-    /// Build a fresh client pointed at `homeserver`.
+    /// Build a fresh client pointed at `homeserver`, backed by a persistent
+    /// SQLite store so end-to-end encryption keys and room state survive
+    /// restarts.
     async fn build_client(&self, homeserver: &str) -> Result<Client> {
+        let _ = tokio::fs::create_dir_all(&self.store_path).await;
         Client::builder()
             .homeserver_url(homeserver)
+            .sqlite_store(&self.store_path, None)
             .build()
             .await
             .with_context(|| format!("failed to build client for homeserver {homeserver}"))
@@ -269,17 +280,23 @@ impl MatrixManager {
 
         let mut messages = Vec::new();
         for event in &response.chunk {
+            // With e2e-encryption enabled, `messages()` decrypts events in
+            // place, so `raw()` already yields plaintext for events we have
+            // keys for. Events we could not decrypt remain `m.room.encrypted`.
             let value: Value = match serde_json::from_str(event.raw().json().get()) {
                 Ok(value) => value,
                 Err(_) => continue,
             };
+            let event_type = value.get("type").and_then(Value::as_str);
+            let unable_to_decrypt = event_type == Some("m.room.encrypted");
             messages.push(json!({
-                "type": value.get("type").and_then(Value::as_str),
+                "type": event_type,
                 "sender": value.get("sender").and_then(Value::as_str),
                 "event_id": value.get("event_id").and_then(Value::as_str),
                 "origin_server_ts": value.get("origin_server_ts").cloned().unwrap_or(Value::Null),
                 "msgtype": value.pointer("/content/msgtype").and_then(Value::as_str),
                 "body": value.pointer("/content/body").and_then(Value::as_str),
+                "unable_to_decrypt": unable_to_decrypt,
             }));
         }
         // `backward` yields newest-first; reverse for chronological reading.
@@ -317,4 +334,14 @@ fn default_session_path() -> PathBuf {
         }
     }
     PathBuf::from("matrix-mcp-session.json")
+}
+
+/// Default location for the SQLite crypto/state store: a `store` directory
+/// alongside the session file.
+fn default_store_path(session_path: &std::path::Path) -> PathBuf {
+    session_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("store")
 }
