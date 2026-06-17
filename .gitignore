@@ -7,6 +7,5 @@ matrix-mcp-session.json
 *.session.json
 .env
 
-# Build/check logs
-check.log
-build.log
+# Build/check/run logs
+*.log
