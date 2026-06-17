@@ -158,11 +158,18 @@ impl MatrixServer {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for MatrixServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "Matrix MCP server. Tools let you log in to a Matrix homeserver, list joined rooms, \
-             read and send messages, and join rooms. Start with `whoami` to check the login \
-             state, then `login` if needed. End-to-end encrypted rooms are listed but their \
-             message contents cannot be decrypted by this server.",
-        )
+        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(
+                "Matrix MCP server. Tools let you log in to a Matrix homeserver, list joined \
+                 rooms, read and send messages, and join rooms. Start with `whoami` to check the \
+                 login state, then `login` if needed. End-to-end encrypted rooms are listed but \
+                 their message contents cannot be decrypted by this server.",
+            );
+        info.server_info.name = env!("CARGO_PKG_NAME").to_string();
+        info.server_info.version = env!("CARGO_PKG_VERSION").to_string();
+        info.server_info.title = Some("Matrix MCP".to_string());
+        info.server_info.description =
+            Some("A Model Context Protocol server for the Matrix chat protocol.".to_string());
+        info
     }
 }
