@@ -19,6 +19,14 @@ use tokio::sync::RwLock;
 /// How long a single `sync_once` is allowed to run before we give up.
 const SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Sync settings for an on-demand, one-shot refresh. The default
+/// [`SyncSettings`] long-poll (30s) for new events; we instead use a zero
+/// server-side timeout so the call returns the current state promptly while
+/// still flushing outgoing E2EE requests (key uploads and room-key sharing).
+fn refresh_sync_settings() -> SyncSettings {
+    SyncSettings::default().timeout(std::time::Duration::from_secs(0))
+}
+
 /// On-disk representation of a logged-in session. We persist the homeserver
 /// alongside the Matrix session so it can be rebuilt on the next startup.
 #[derive(Serialize, Deserialize)]
@@ -119,7 +127,7 @@ impl MatrixManager {
             .context("login failed")?;
 
         self.persist_session(&client, &homeserver).await?;
-        let _ = client.sync_once(SyncSettings::default()).await;
+        let _ = client.sync_once(refresh_sync_settings()).await;
 
         let info = LoginInfo {
             user_id: client.user_id().map(ToString::to_string).unwrap_or_default(),
@@ -148,7 +156,7 @@ impl MatrixManager {
             .restore_session(persisted.session, RoomLoadSettings::default())
             .await
             .context("restoring saved session")?;
-        let _ = client.sync_once(SyncSettings::default()).await;
+        let _ = client.sync_once(refresh_sync_settings()).await;
         *self.client.write().await = Some(client);
         Ok(true)
     }
@@ -195,7 +203,7 @@ impl MatrixManager {
     /// Run a single sync against the server to refresh local state.
     pub async fn sync(&self) -> Result<()> {
         let client = self.connected_client().await?;
-        tokio::time::timeout(SYNC_TIMEOUT, client.sync_once(SyncSettings::default()))
+        tokio::time::timeout(SYNC_TIMEOUT, client.sync_once(refresh_sync_settings()))
             .await
             .context("sync timed out")?
             .context("sync failed")?;
