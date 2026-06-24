@@ -5,8 +5,7 @@ use std::sync::Arc;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
-    schemars, tool, tool_handler, tool_router,
-    ErrorData, ServerHandler,
+    schemars, tool, tool_handler, tool_router, ErrorData, ServerHandler,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -15,9 +14,13 @@ use crate::matrix::MatrixManager;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct LoginArgs {
-    #[schemars(description = "Homeserver URL, e.g. https://matrix.org. Optional if MATRIX_HOMESERVER is set.")]
+    #[schemars(
+        description = "Homeserver URL, e.g. https://matrix.org. Optional if MATRIX_HOMESERVER is set."
+    )]
     pub homeserver: Option<String>,
-    #[schemars(description = "Matrix username (the localpart, e.g. `alice`, or a full @alice:server).")]
+    #[schemars(
+        description = "Matrix username (the localpart, e.g. `alice`, or a full @alice:server)."
+    )]
     pub username: String,
     #[schemars(description = "Account password.")]
     pub password: String,
@@ -65,8 +68,7 @@ impl MatrixServer {
 
 /// Wrap a serde_json value as a pretty-printed text result.
 fn json_result(value: Value) -> Result<CallToolResult, ErrorData> {
-    let text = serde_json::to_string_pretty(&value)
-        .unwrap_or_else(|_| value.to_string());
+    let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
     Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
@@ -77,8 +79,10 @@ fn err(e: anyhow::Error) -> ErrorData {
 
 #[tool_router]
 impl MatrixServer {
-    #[tool(description = "Log in to a Matrix homeserver with a username and password. \
-        The session is saved to disk and reused on the next start.")]
+    #[tool(
+        description = "Log in to a Matrix homeserver with a username and password. \
+        The session is saved to disk and reused on the next start."
+    )]
     async fn login(
         &self,
         Parameters(args): Parameters<LoginArgs>,
@@ -96,24 +100,32 @@ impl MatrixServer {
         }))
     }
 
-    #[tool(description = "Report the current login state: user id, device, homeserver, and joined room count.")]
+    #[tool(
+        description = "Report the current login state: user id, device, homeserver, and joined room count."
+    )]
     async fn whoami(&self) -> Result<CallToolResult, ErrorData> {
         json_result(self.matrix.whoami().await)
     }
 
-    #[tool(description = "Run a single sync against the homeserver to refresh the local room list and state.")]
+    #[tool(
+        description = "Run a single sync against the homeserver to refresh the local room list and state."
+    )]
     async fn sync(&self) -> Result<CallToolResult, ErrorData> {
         self.matrix.sync().await.map_err(err)?;
         json_result(serde_json::json!({ "synced": true }))
     }
 
-    #[tool(description = "List the rooms the logged-in account has joined, with id, name, topic, and encryption state.")]
+    #[tool(
+        description = "List the rooms the logged-in account has joined, with id, name, topic, and encryption state."
+    )]
     async fn list_rooms(&self) -> Result<CallToolResult, ErrorData> {
         let rooms = self.matrix.list_rooms().await.map_err(err)?;
         json_result(rooms)
     }
 
-    #[tool(description = "Send a text message to a room. Set markdown=true to format the body as Markdown.")]
+    #[tool(
+        description = "Send a text message to a room. Set markdown=true to format the body as Markdown."
+    )]
     async fn send_message(
         &self,
         Parameters(args): Parameters<SendMessageArgs>,
@@ -130,9 +142,11 @@ impl MatrixServer {
         }))
     }
 
-    #[tool(description = "Read the most recent messages from a room, in chronological order. \
+    #[tool(
+        description = "Read the most recent messages from a room, in chronological order. \
         End-to-end encrypted messages are decrypted automatically when the keys are available; \
-        any that cannot be decrypted are flagged with unable_to_decrypt=true.")]
+        any that cannot be decrypted are flagged with unable_to_decrypt=true."
+    )]
     async fn read_messages(
         &self,
         Parameters(args): Parameters<ReadMessagesArgs>,

@@ -70,7 +70,8 @@ impl MatrixManager {
         let default_homeserver = non_empty("MATRIX_HOMESERVER");
         let env_user = non_empty("MATRIX_USER");
         let env_password = non_empty("MATRIX_PASSWORD");
-        let device_name = non_empty("MATRIX_DEVICE_NAME").unwrap_or_else(|| "matrix-mcp".to_string());
+        let device_name =
+            non_empty("MATRIX_DEVICE_NAME").unwrap_or_else(|| "matrix-mcp".to_string());
         let session_path = non_empty("MATRIX_SESSION_FILE")
             .map(PathBuf::from)
             .unwrap_or_else(default_session_path);
@@ -113,9 +114,7 @@ impl MatrixManager {
         let homeserver = homeserver
             .map(str::to_owned)
             .or_else(|| self.default_homeserver.clone())
-            .ok_or_else(|| {
-                anyhow!("no homeserver provided and MATRIX_HOMESERVER is not set")
-            })?;
+            .ok_or_else(|| anyhow!("no homeserver provided and MATRIX_HOMESERVER is not set"))?;
 
         let client = self.build_client(&homeserver).await?;
         client
@@ -130,8 +129,14 @@ impl MatrixManager {
         let _ = client.sync_once(refresh_sync_settings()).await;
 
         let info = LoginInfo {
-            user_id: client.user_id().map(ToString::to_string).unwrap_or_default(),
-            device_id: client.device_id().map(ToString::to_string).unwrap_or_default(),
+            user_id: client
+                .user_id()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            device_id: client
+                .device_id()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
             homeserver: client.homeserver().to_string(),
         };
         *self.client.write().await = Some(client);
@@ -196,7 +201,9 @@ impl MatrixManager {
     /// Return the connected client or a helpful error if not logged in.
     async fn connected_client(&self) -> Result<Client> {
         self.client.read().await.clone().ok_or_else(|| {
-            anyhow!("not logged in - use the `login` tool or set the MATRIX_* environment variables")
+            anyhow!(
+                "not logged in - use the `login` tool or set the MATRIX_* environment variables"
+            )
         })
     }
 
