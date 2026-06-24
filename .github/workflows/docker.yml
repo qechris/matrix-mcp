@@ -1,12 +1,13 @@
-# Build and publish the matrix-mcp container image to GHCR.
+# Build and publish the multi-arch matrix-mcp container image to GHCR.
 #
-# This builds a single linux/amd64 image. The repository is private, so the
-# free `ubuntu-24.04-arm` hosted runners (public-repos-only) are not available;
-# a native arm64 build would otherwise need paid larger runners and emulated
-# (QEMU) arm64 builds of the matrix-sdk C SQLite + vodozemac/rustls stack are
-# painfully slow. To add linux/arm64 later: either make the repo public and add
-# a native `ubuntu-24.04-arm` matrix leg with manifest merge, or add
-# docker/setup-qemu-action and set `platforms: linux/amd64,linux/arm64`.
+# Pattern: native-runner-per-arch + manifest merge. Each architecture is built
+# on a real runner of that architecture (no QEMU), because the image compiles
+# the matrix-sdk C SQLite store from source and the vodozemac/rustls crypto
+# crates -- emulated builds of that workload are painfully slow and fragile.
+# arm64 uses the free public-repo `ubuntu-24.04-arm` hosted runner. Each arch
+# build pushes the image BY DIGEST (no tag yet); a final "merge" job stitches
+# the per-arch digests into the human-facing tags with
+# "docker buildx imagetools create".
 #
 # Requires a Dockerfile at the repo root (multi-stage: rust:1-bookworm builder
 # running `cargo build --release --locked`, then a debian:bookworm-slim runtime
@@ -19,7 +20,8 @@ name: Docker
     tags: ['v*.*.*']
   workflow_dispatch:
 
-# Least privilege: only the build job opts into packages: write to push to GHCR.
+# Least privilege at the top level: read-only. Any job that pushes images to
+# GHCR opts into packages: write explicitly.
 permissions:
   contents: read
 
@@ -34,14 +36,90 @@ env:
 
 jobs:
   build:
-    name: build and push (amd64)
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Metadata here only attaches OCI labels to the per-arch image; the actual
+      # tags are computed in the merge job. Everything is pushed by digest.
+      - name: Extract image labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # With push-by-digest=true the default attestations push extra
+          # "unknown/unknown" manifests that surface as bogus platform entries
+          # after `imagetools create`; disable them for one clean per-arch image.
+          provenance: false
+          sbom: false
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      # Persist the pushed digest as a bare-hex filename for the merge job. The
+      # "sha256:" prefix is stripped; the merge job rebuilds "${IMAGE}@sha256:..."
+      # from it, so do not change this naming.
+      - name: Export digest
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: merge manifests
     runs-on: ubuntu-latest
+    needs: build
     permissions:
       contents: read
       packages: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      # Pull every per-arch digest artifact into one directory. merge-multiple
+      # flattens all digest-* artifacts so the dir contains only bare-hex files.
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -58,9 +136,8 @@ jobs:
       #   - release tags vX.Y.Z        -> "X.Y.Z", "X.Y", and "latest"
       #   - prerelease tags vX.Y.Z-rc1 -> "X.Y.Z-rc1" only (NOT "latest"/"X.Y")
       # latest=false disables metadata-action's implicit latest; we add it back
-      # explicitly, gated to non-prerelease tags (no '-' in the ref) so a
-      # prerelease never becomes the default-pulled image.
-      - name: Compute tags and labels
+      # explicitly, gated to non-prerelease tags (no '-' in the ref).
+      - name: Compute tags
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -74,13 +151,16 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-') }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # Build one "-t" flag per computed tag and reference every per-arch digest
+      # by its IMAGE@sha256:... form, then create the multi-arch manifest list.
+      - name: Create and push manifest list
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${DOCKER_METADATA_OUTPUT_JSON}") \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      - name: Inspect pushed image
+        if: steps.meta.outputs.version != ''
+        run: |
+          docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.version }}"

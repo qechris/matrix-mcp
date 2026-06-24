@@ -28,20 +28,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Native builds only (no cross-compilation of the C SQLite + rustls
-        # crypto stack). aarch64-unknown-linux-gnu is intentionally omitted:
-        # it needs the free public-repo `ubuntu-24.04-arm` runner, which is not
-        # available to this private repo. Re-add it (with target aarch64-...)
-        # if the repo becomes public.
+        # Native Linux builds only (no cross-compilation of the C SQLite +
+        # rustls crypto stack). Each target == its host runner. arm64 uses the
+        # free public-repo `ubuntu-24.04-arm` hosted runner.
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-13
-            target: x86_64-apple-darwin
-          - os: macos-14
-            target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     steps:
       # Resolve the tag BEFORE checkout so the workflow_dispatch path can check
@@ -129,9 +123,8 @@ jobs:
         shell: bash
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Package (unix)
-        if: runner.os != 'Windows'
-        id: package_unix
+      - name: Package
+        id: package
         shell: bash
         env:
           VERSION: ${{ steps.tag.outputs.version }}
@@ -159,35 +152,6 @@ jobs:
             echo "checksum=${ARCHIVE}.sha256"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Package (windows)
-        if: runner.os == 'Windows'
-        id: package_windows
-        shell: pwsh
-        env:
-          VERSION: ${{ steps.tag.outputs.version }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $version = $env:VERSION
-          $target = $env:TARGET
-          $bin = 'matrix-mcp.exe'
-          $archive = "matrix-mcp-$version-$target.zip"
-          $stage = Join-Path $env:RUNNER_TEMP 'pkg'
-          if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-          New-Item -ItemType Directory -Path $stage | Out-Null
-
-          Copy-Item "target/$target/release/$bin" (Join-Path $stage $bin)
-          if (Test-Path 'README.md') { Copy-Item 'README.md' (Join-Path $stage 'README.md') }
-          if (Test-Path 'LICENSE') { Copy-Item 'LICENSE' (Join-Path $stage 'LICENSE') }
-
-          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -Force
-
-          $hash = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLower()
-          "$hash  $archive" | Out-File -Encoding ascii -NoNewline "$archive.sha256"
-
-          "archive=$archive" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "checksum=$archive.sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -195,9 +159,7 @@ jobs:
           path: |
             matrix-mcp-${{ steps.tag.outputs.version }}-${{ matrix.target }}.tar.gz
             matrix-mcp-${{ steps.tag.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
-            matrix-mcp-${{ steps.tag.outputs.version }}-${{ matrix.target }}.zip
-            matrix-mcp-${{ steps.tag.outputs.version }}-${{ matrix.target }}.zip.sha256
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 7
 
   release:
@@ -272,8 +234,6 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
-            dist/*.zip
-            dist/*.zip.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

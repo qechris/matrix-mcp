@@ -128,9 +128,9 @@ A few practical notes:
 
 ## Container image
 
-A `linux/amd64` image is published to the GitHub Container Registry on every
-push to `main` (tagged `main` / `edge`) and on every release tag (`X.Y.Z`,
-`X.Y`, and `latest` for non-prereleases):
+Multi-arch images (`linux/amd64`, `linux/arm64`) are published to the GitHub
+Container Registry on every push to `main` (tagged `main` / `edge`) and on every
+release tag (`X.Y.Z`, `X.Y`, and `latest` for non-prereleases):
 
 ```sh
 docker run --rm -p 8000:8000 -v matrix-mcp-data:/data \
@@ -152,8 +152,8 @@ GitHub Actions workflows under `.github/workflows/`:
 |----------|---------|--------------|
 | `ci.yml` | PRs, push to `main` | `rustfmt`, `clippy -D warnings`, build/test, and the full E2E suite (`tests/e2e/run.sh`) against a real Synapse |
 | `audit.yml` | Cargo.lock changes, weekly | `cargo audit` against the RustSec advisory DB |
-| `release.yml` | tags `v*.*.*` | builds native binaries (Linux x86_64, macOS x86_64 + Apple Silicon, Windows x86_64), publishes a GitHub Release with checksums, and publishes to crates.io if `CARGO_REGISTRY_TOKEN` is set |
-| `docker.yml` | push to `main`, tags `v*.*.*` | builds and pushes the `linux/amd64` image to GHCR |
+| `release.yml` | tags `v*.*.*` | builds native Linux binaries (x86_64 + aarch64), publishes a GitHub Release with checksums, and publishes to crates.io if `CARGO_REGISTRY_TOKEN` is set |
+| `docker.yml` | push to `main`, tags `v*.*.*` | builds and pushes the multi-arch (`amd64` + `arm64`) image to GHCR |
 
 Dependency updates are managed by Dependabot (`.github/dependabot.yml`).
 
