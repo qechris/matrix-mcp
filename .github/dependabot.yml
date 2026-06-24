@@ -1,0 +1,65 @@
+version: 2
+updates:
+  # Rust dependencies (Cargo.toml / Cargo.lock at the repo root).
+  # Single-crate project — there are no workspace members, so "/" is the only
+  # directory that needs scanning.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "rust"
+    commit-message:
+      prefix: "cargo"
+      prefix-development: "cargo-dev"
+      include: "scope"
+    # matrix-sdk is pinned to "=0.16.1" in Cargo.toml. The exact requirement
+    # already prevents Dependabot from proposing 0.16.x or 0.17 version bumps,
+    # because matrix-sdk minor releases routinely break the public API and the
+    # bundled-sqlite / vodozemac stack. The explicit ignore below makes that
+    # intent visible so reviewers do not expect the group to keep it current.
+    # rmcp 1.7 is coupled to axum 0.8 / hyper via matrix-sdk; an rmcp minor bump
+    # can desync that line, so rmcp minor/patch updates are held back as well and
+    # must be raised and vetted deliberately rather than auto-grouped.
+    # Note: these ignores apply to version updates only; Dependabot still raises
+    # security updates for any dependency regardless of these rules and limits.
+    ignore:
+      - dependency-name: "matrix-sdk"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: "rmcp"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+    groups:
+      cargo-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+  # GitHub Actions used by the workflows in .github/workflows (ci.yml, docker.yml).
+  # Dependabot auto-scans .github/workflows when the directory is "/".
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"

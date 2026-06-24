@@ -1,0 +1,125 @@
+# Continuous integration for matrix-mcp.
+#
+# Runs on every pull request and on pushes to the default branch. Formatting
+# and lint jobs are fast gates; the build job compiles and runs the test
+# harness in the release profile (which currently has no unit tests but guards
+# future ones); the e2e job is the slow, comprehensive gate that stands up a
+# real Synapse homeserver and exercises end-to-end encryption.
+name: CI
+
+'on':
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: CI only needs to read the repository contents.
+permissions:
+  contents: read
+
+# Cancel superseded runs for the same ref (a new push to a PR makes the
+# previous in-flight run obsolete).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (with rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (with clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # --locked keeps the lint gate honest about the committed Cargo.lock, for
+      # parity with the build job (a drifted lockfile fails here too, not only
+      # in build).
+      - name: Run clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  build:
+    name: build & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # cargo test builds the binary and dependency tree (in the release
+      # profile) and then runs the tests in one pass. No unit tests exist yet,
+      # so this reports 0 tests run; it is kept so any future tests are
+      # exercised automatically. Compiling only once (rather than a separate
+      # build + test) avoids recompiling the heavy dependency tree twice.
+      - name: Build & test (release)
+        run: cargo test --release --locked
+
+  e2e:
+    # Slow, comprehensive end-to-end job: provisions a throwaway Synapse
+    # homeserver in a Python venv, builds the release binary, and runs the
+    # pytest suite (real Matrix protocol traffic + E2EE) against it. This is the
+    # authoritative integration gate and intentionally part of required CI.
+    #
+    # Triggered via pull_request (not pull_request_target): forked PRs run with
+    # a read-only token and no secret access, which is the secure choice for a
+    # job that executes contributor code.
+    name: e2e (synapse + e2ee)
+    runs-on: ubuntu-latest
+    # 45 minutes to tolerate a cold Swatinem cache: the first run (or any cache
+    # miss) compiles the full matrix-sdk tree from source, including the
+    # C-source bundled SQLite and vodozemac, before pip-installing
+    # matrix-synapse and running the (slow, Olm/megolm) E2EE suite. The
+    # warm-cache happy path finishes well under this.
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Pinned to 3.11 to match the version the harness is validated against.
+      # No pip cache is configured because the venv installs matrix-synapse +
+      # pytest directly and there is no requirements file for
+      # actions/setup-python's cache: pip to key on.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # tests/e2e/run.sh builds the release binary itself (cargo build
+      # --release) and forwards "$@" to pytest, so -q is a pytest flag.
+      - name: Run end-to-end suite
+        run: bash tests/e2e/run.sh -q

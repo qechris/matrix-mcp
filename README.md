@@ -1,5 +1,10 @@
 # matrix-mcp
 
+[![CI](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/ci.yml)
+[![Release](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/release.yml/badge.svg)](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/release.yml)
+[![Docker](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/docker.yml/badge.svg)](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/docker.yml)
+[![GHCR](https://img.shields.io/badge/ghcr.io-qa--chrisb%2Fmatrix--mcp-blue?logo=docker)](https://github.com/qa-chrisb/matrix-mcp/pkgs/container/matrix-mcp)
+
 A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server for the
 [Matrix](https://matrix.org) chat protocol, written in Rust on top of the two
 official SDKs:
@@ -120,6 +125,56 @@ A few practical notes:
   `unable_to_decrypt: true`.
 - This build does not perform interactive device verification or cross-signing,
   so other users may see this device as unverified.
+
+## Container image
+
+A `linux/amd64` image is published to the GitHub Container Registry on every
+push to `main` (tagged `main` / `edge`) and on every release tag (`X.Y.Z`,
+`X.Y`, and `latest` for non-prereleases):
+
+```sh
+docker run --rm -p 8000:8000 -v matrix-mcp-data:/data \
+  -e MATRIX_HOMESERVER=https://matrix.org \
+  ghcr.io/qa-chrisb/matrix-mcp:latest
+# SSE/streamable-HTTP MCP endpoint: http://localhost:8000/mcp
+```
+
+The image defaults to the SSE transport bound to `0.0.0.0:8000`, runs as a
+non-root user, and persists the session + encryption store under the `/data`
+volume. The endpoint has no auth of its own — front it with a reverse proxy
+(auth + TLS) before exposing it to untrusted networks.
+
+## Continuous integration & deployment
+
+GitHub Actions workflows under `.github/workflows/`:
+
+| Workflow | Trigger | What it does |
+|----------|---------|--------------|
+| `ci.yml` | PRs, push to `main` | `rustfmt`, `clippy -D warnings`, build/test, and the full E2E suite (`tests/e2e/run.sh`) against a real Synapse |
+| `audit.yml` | Cargo.lock changes, weekly | `cargo audit` against the RustSec advisory DB |
+| `release.yml` | tags `v*.*.*` | builds native binaries (Linux x86_64, macOS x86_64 + Apple Silicon, Windows x86_64), publishes a GitHub Release with checksums, and publishes to crates.io if `CARGO_REGISTRY_TOKEN` is set |
+| `docker.yml` | push to `main`, tags `v*.*.*` | builds and pushes the `linux/amd64` image to GHCR |
+
+Dependency updates are managed by Dependabot (`.github/dependabot.yml`).
+
+## Releasing
+
+1. Bump `version` in `Cargo.toml` (the release build fails if the tag doesn't
+   match) and commit.
+2. Tag and push:
+
+   ```sh
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+
+3. `release.yml` builds the cross-platform binaries and publishes the GitHub
+   Release; `docker.yml` builds and pushes the container image. Use a
+   `vX.Y.Z-rc1`-style tag for a prerelease (marked prerelease; not tagged
+   `latest`).
+
+To enable crates.io publishing, add a `CARGO_REGISTRY_TOKEN` repository secret;
+without it the publish step is skipped cleanly.
 
 ## Limitations
 

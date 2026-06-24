@@ -1,0 +1,60 @@
+# .dockerignore — allowlist build context for a minimal, reproducible image.
+#
+# This file is an ALLOWLIST, not a denylist: it starts by excluding the
+# ENTIRE build context with `*`, then re-includes ONLY the files the image
+# build actually needs:
+#
+#   Cargo.toml   (manifest; also declares `readme = "README.md"`)
+#   Cargo.lock   (required for `cargo build --release --locked`)
+#   src/         (the Rust sources)
+#   README.md    (referenced by Cargo.toml `readme`, so the build needs it)
+#
+# Leading-`*` allowlisting is deliberate defense-in-depth: any unanticipated
+# credential-bearing file (credentials.yaml, secrets.toml, id_rsa, *.pem,
+# *.key, a local .env, a Matrix session store, the .git history, etc.) is
+# excluded by default and can never leak into a build layer / `docker history`
+# unless it is explicitly re-included below.
+#
+# Order matters: in classic-builder dockerignore semantics a later rule wins,
+# so all `!`-negations MUST come after the `*` catch-all, and a directory must
+# be re-included before its contents (`!src/` then `!src/**`).
+
+# ---------------------------------------------------------------------------
+# 1. Exclude everything.
+# ---------------------------------------------------------------------------
+*
+
+# ---------------------------------------------------------------------------
+# 2. Belt-and-suspenders: explicitly deny secret/credential patterns.
+#    Already covered by the `*` above, but listed so the intent is documented
+#    and so the denylist survives if the `*` is ever removed.
+# ---------------------------------------------------------------------------
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.crt
+**/*.p12
+**/*.pfx
+**/id_rsa*
+**/.netrc
+**/*.session.json
+matrix-mcp-session.json
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
+**/*.db
+matrix-store/
+store/
+
+# ---------------------------------------------------------------------------
+# 3. Re-include ONLY what the build needs.
+#    `!src/` re-includes the directory entry; `!src/**` re-includes its
+#    contents (required under classic-builder semantics — `!src/` alone would
+#    not resurrect the files inside it).
+# ---------------------------------------------------------------------------
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
+!README.md

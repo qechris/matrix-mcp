@@ -1,0 +1,52 @@
+# Supply-chain security audit: scans the committed Cargo.lock against the
+# RustSec advisory database. This runs as its own workflow (not part of the
+# required CI gates) so a newly-published advisory surfaces a red check and a
+# weekly heads-up without blocking unrelated PRs from merging.
+name: Security audit
+
+'on':
+  push:
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.github/workflows/audit.yml'
+  pull_request:
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+  schedule:
+    # Weekly, Monday 06:00 UTC — catches advisories published against otherwise
+    # unchanged dependencies.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # Audits Cargo.lock against the RustSec advisory database. Fails the job
+      # (this workflow only) if a vulnerability or unmaintained-crate advisory
+      # applies to the locked dependency graph.
+      - name: Run cargo audit
+        run: cargo audit

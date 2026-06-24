@@ -1,0 +1,86 @@
+# Build and publish the matrix-mcp container image to GHCR.
+#
+# This builds a single linux/amd64 image. The repository is private, so the
+# free `ubuntu-24.04-arm` hosted runners (public-repos-only) are not available;
+# a native arm64 build would otherwise need paid larger runners and emulated
+# (QEMU) arm64 builds of the matrix-sdk C SQLite + vodozemac/rustls stack are
+# painfully slow. To add linux/arm64 later: either make the repo public and add
+# a native `ubuntu-24.04-arm` matrix leg with manifest merge, or add
+# docker/setup-qemu-action and set `platforms: linux/amd64,linux/arm64`.
+#
+# Requires a Dockerfile at the repo root (multi-stage: rust:1-bookworm builder
+# running `cargo build --release --locked`, then a debian:bookworm-slim runtime
+# with a non-root user, SSE transport on 0.0.0.0:8000).
+name: Docker
+
+'on':
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+# Least privilege: only the build job opts into packages: write to push to GHCR.
+permissions:
+  contents: read
+
+# One in-flight run per ref. Branch pushes cancel superseded runs; tag builds
+# (refs/tags/*) are never cancelled so a release publish completes uninterrupted.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  IMAGE: ghcr.io/qa-chrisb/matrix-mcp
+
+jobs:
+  build:
+    name: build and push (amd64)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Compute the human-facing tags:
+      #   - branch pushes to main      -> "main" and "edge"
+      #   - release tags vX.Y.Z        -> "X.Y.Z", "X.Y", and "latest"
+      #   - prerelease tags vX.Y.Z-rc1 -> "X.Y.Z-rc1" only (NOT "latest"/"X.Y")
+      # latest=false disables metadata-action's implicit latest; we add it back
+      # explicitly, gated to non-prerelease tags (no '-' in the ref) so a
+      # prerelease never becomes the default-pulled image.
+      - name: Compute tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=branch
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
