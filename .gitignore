@@ -9,3 +9,8 @@ matrix-mcp-session.json
 
 # Build/check/run logs
 *.log
+
+# E2E test artifacts
+tests/e2e/.work/
+__pycache__/
+.pytest_cache/
