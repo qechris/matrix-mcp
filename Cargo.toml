@@ -5,7 +5,7 @@ edition = "2021"
 description = "A Model Context Protocol (MCP) server for the Matrix chat protocol, built on the official Rust SDKs (rmcp + matrix-sdk)."
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/qa-chrisb/matrix-mcp"
+repository = "https://github.com/qechris/matrix-mcp"
 keywords = ["matrix", "mcp", "model-context-protocol", "chat", "llm"]
 categories = ["command-line-utilities"]
 

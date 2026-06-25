@@ -42,10 +42,10 @@ FROM debian:bookworm-slim AS runtime
 
 LABEL org.opencontainers.image.title="matrix-mcp" \
       org.opencontainers.image.description="A Model Context Protocol (MCP) server for the Matrix chat protocol, built on the official Rust SDKs (rmcp + matrix-sdk)." \
-      org.opencontainers.image.source="https://github.com/qa-chrisb/matrix-mcp" \
-      org.opencontainers.image.url="https://github.com/qa-chrisb/matrix-mcp" \
+      org.opencontainers.image.source="https://github.com/qechris/matrix-mcp" \
+      org.opencontainers.image.url="https://github.com/qechris/matrix-mcp" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.vendor="qa-chrisb"
+      org.opencontainers.image.vendor="qechris"
 
 # Install runtime dependencies, then drop apt lists to keep the image small.
 RUN apt-get update && \

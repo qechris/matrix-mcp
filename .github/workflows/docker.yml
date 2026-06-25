@@ -32,7 +32,7 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
-  IMAGE: ghcr.io/qa-chrisb/matrix-mcp
+  IMAGE: ghcr.io/qechris/matrix-mcp
 
 jobs:
   build:

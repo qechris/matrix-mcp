@@ -1,9 +1,9 @@
 # matrix-mcp
 
-[![CI](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/ci.yml)
-[![Release](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/release.yml/badge.svg)](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/release.yml)
-[![Docker](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/docker.yml/badge.svg)](https://github.com/qa-chrisb/matrix-mcp/actions/workflows/docker.yml)
-[![GHCR](https://img.shields.io/badge/ghcr.io-qa--chrisb%2Fmatrix--mcp-blue?logo=docker)](https://github.com/qa-chrisb/matrix-mcp/pkgs/container/matrix-mcp)
+[![CI](https://github.com/qechris/matrix-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/qechris/matrix-mcp/actions/workflows/ci.yml)
+[![Release](https://github.com/qechris/matrix-mcp/actions/workflows/release.yml/badge.svg)](https://github.com/qechris/matrix-mcp/actions/workflows/release.yml)
+[![Docker](https://github.com/qechris/matrix-mcp/actions/workflows/docker.yml/badge.svg)](https://github.com/qechris/matrix-mcp/actions/workflows/docker.yml)
+[![GHCR](https://img.shields.io/badge/ghcr.io-qechris%2Fmatrix--mcp-blue?logo=docker)](https://github.com/qechris/matrix-mcp/pkgs/container/matrix-mcp)
 
 A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server for the
 [Matrix](https://matrix.org) chat protocol, written in Rust on top of the two
@@ -135,7 +135,7 @@ release tag (`X.Y.Z`, `X.Y`, and `latest` for non-prereleases):
 ```sh
 docker run --rm -p 8000:8000 -v matrix-mcp-data:/data \
   -e MATRIX_HOMESERVER=https://matrix.org \
-  ghcr.io/qa-chrisb/matrix-mcp:latest
+  ghcr.io/qechris/matrix-mcp:latest
 # SSE/streamable-HTTP MCP endpoint: http://localhost:8000/mcp
 ```
 
@@ -143,6 +143,20 @@ The image defaults to the SSE transport bound to `0.0.0.0:8000`, runs as a
 non-root user, and persists the session + encryption store under the `/data`
 volume. The endpoint has no auth of its own — front it with a reverse proxy
 (auth + TLS) before exposing it to untrusted networks.
+
+**Available tags:** pushes to `main` produce `:main` and `:edge`; the `:latest`
+(and `:X.Y` / `:X.Y.Z`) tags are only created by a release tag (`vX.Y.Z`), so
+until the first release, pull `:main`.
+
+**Visibility:** GHCR packages are **private by default**, even for a public
+repo. To allow anonymous `docker pull`, make the package public once at
+`https://github.com/users/qechris/packages/container/matrix-mcp/settings`
+(Danger Zone → Change visibility → Public). Otherwise authenticate first:
+
+```sh
+echo "$GHCR_TOKEN" | docker login ghcr.io -u qechris --password-stdin   # token needs read:packages
+docker pull ghcr.io/qechris/matrix-mcp:main
+```
 
 ## Continuous integration & deployment
 
