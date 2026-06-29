@@ -67,7 +67,7 @@ jobs:
       # tags are computed in the merge job. Everything is pushed by digest.
       - name: Extract image labels
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
 
@@ -139,7 +139,7 @@ jobs:
       # explicitly, gated to non-prerelease tags (no '-' in the ref).
       - name: Compute tags
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           flavor: |
