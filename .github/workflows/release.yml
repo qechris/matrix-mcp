@@ -70,7 +70,7 @@ jobs:
           echo "Resolved tag=${TAG} version=${VERSION}"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # For tag pushes, GITHUB_REF_NAME already equals the tag, so this is a
           # no-op. For workflow_dispatch, this checks out the dispatched tag's
@@ -257,7 +257,7 @@ jobs:
 
       - name: Checkout
         if: env.CARGO_REGISTRY_TOKEN != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
