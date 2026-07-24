@@ -51,7 +51,7 @@ def _register(username, password):
         body={"username": username, "password": password, "auth": {"type": "m.login.dummy"}},
     )
     if status == 200:
-        return resp["access_token"], resp["user_id"]
+        return resp["access_token"], resp["user_id"], resp["device_id"]
     # Fall back to login if the account already exists.
     status, resp = hs_http(
         "POST",
@@ -63,7 +63,7 @@ def _register(username, password):
         },
     )
     assert status == 200, f"register/login failed for {username}: {resp}"
-    return resp["access_token"], resp["user_id"]
+    return resp["access_token"], resp["user_id"], resp["device_id"]
 
 
 @pytest.fixture(scope="session")
@@ -102,6 +102,10 @@ class User(dict):
     def token(self):
         return self["token"]
 
+    @property
+    def device_id(self):
+        return self["device_id"]
+
 
 @pytest.fixture
 def register_user(homeserver):
@@ -109,8 +113,14 @@ def register_user(homeserver):
     def _make(prefix="user"):
         username = f"{prefix}-{uuid.uuid4().hex[:10]}"
         password = "pw-" + uuid.uuid4().hex[:12]
-        token, user_id = _register(username, password)
-        return User(username=username, password=password, user_id=user_id, token=token)
+        token, user_id, device_id = _register(username, password)
+        return User(
+            username=username,
+            password=password,
+            user_id=user_id,
+            token=token,
+            device_id=device_id,
+        )
 
     return _make
 
@@ -186,6 +196,15 @@ def create_room(token, name, invite=None, encrypted=False, alias=None, topic=Non
     status, resp = hs_http("POST", "/_matrix/client/v3/createRoom", token=token, body=body)
     assert status == 200, f"createRoom failed: {resp}"
     return resp["room_id"]
+
+
+def create_room_and_sync(server, name="Room", **kwargs):
+    """Create a room via the raw API as `server.user`, then sync so the room
+    is known to the MCP server's own client (rooms created this way bypass
+    the SDK, so it doesn't learn about them until the next sync)."""
+    room_id = create_room(server.user.token, name, **kwargs)
+    server.call_tool("sync")
+    return room_id
 
 
 def get_event(token, room_id, event_id):
