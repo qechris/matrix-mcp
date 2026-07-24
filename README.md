@@ -27,8 +27,11 @@ files and images, look up profiles, and hold direct-message conversations.
 | `login_sso`     | Log in via the homeserver's SSO flow: opens a browser, waits for you to finish signing in. |
 | `login_with_token` | Log in with a pre-obtained access token, for headless/automated setups on an SSO/OAuth homeserver. |
 | `logout`        | Log out, invalidate the access token, and clear the saved session. |
-| `whoami`        | Report the current login state (user id, device, homeserver, joined-room count). |
-| `sync`          | Run a single sync to refresh the local room list and state. |
+| `whoami`        | Report the current login state (user id, device, homeserver, joined-room count, key-backup state). |
+| `sync`          | Run a single sync to refresh the local room list and state, and flush pending key-backup uploads. |
+| `enable_key_backup` | Set up a server-side key backup and return a new recovery key (for accounts that don't have one). |
+| `restore_key_backup` | Unlock the key backup with a recovery key, making messages sent before this device existed readable. |
+| `download_room_keys` | Force-fetch a room's historical keys from the key backup. |
 | `list_rooms`    | List joined rooms with id, name, topic, and encryption state. |
 | `send_message`  | Send a text message to a room (plain text or Markdown), optionally as a rich reply. |
 | `edit_message`  | Edit a previously-sent message (sender only). |
@@ -183,6 +186,35 @@ A few practical notes:
   `unable_to_decrypt: true`.
 - This build does not perform interactive device verification or cross-signing,
   so other users may see this device as unverified.
+
+### Reading messages sent before this device existed
+
+A freshly logged-in device holds none of the room keys for older messages, so
+history in encrypted rooms comes back with `unable_to_decrypt: true`. Those keys
+live in the account's **server-side key backup**, encrypted with a *recovery key*
+(also called a security key — the `EsTx xxxx …` string — or a security
+passphrase). Unlock it once per device:
+
+```
+restore_key_backup(recovery_key: "EsTx xxxx xxxx …")
+```
+
+After that, `read_messages` pulls a room's historical keys automatically the
+first time it hits an undecryptable message and re-decodes the page, so old
+messages simply appear. `download_room_keys` forces the same fetch manually, and
+`whoami` reports the current `key_backup` state.
+
+If the account has no backup yet, `enable_key_backup` creates one and returns a
+newly generated recovery key. **Save it** — it is shown once, cannot be
+recovered, and without it messages in encrypted rooms are unreadable on any
+future device. It refuses to run when a backup already exists, since creating a
+second one would invalidate the existing recovery key and strand the keys backed
+up under it.
+
+Note that no recovery key can retroactively rescue messages whose keys were
+never backed up — if key backup was never enabled on the account, that history
+is gone for any new device. `sync` flushes this device's pending key uploads to
+the backup so its own messages don't end up in that state.
 
 ## Container image
 
