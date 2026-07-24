@@ -15,19 +15,40 @@ official SDKs:
   SDK
 
 It lets an MCP client (Claude, or any other MCP-capable assistant) log in to a
-Matrix homeserver, list rooms, read and send messages, and join rooms.
+Matrix homeserver and drive most of what a full chat client can do: manage
+rooms and their membership, send and edit messages, react and reply, exchange
+files and images, look up profiles, and hold direct-message conversations.
 
 ## Tools
 
 | Tool            | Description |
 |-----------------|-------------|
 | `login`         | Log in with username/password. The session is persisted and reused on the next start. |
+| `login_sso`     | Log in via the homeserver's SSO flow: opens a browser, waits for you to finish signing in. |
+| `login_with_token` | Log in with a pre-obtained access token, for headless/automated setups on an SSO/OAuth homeserver. |
+| `logout`        | Log out, invalidate the access token, and clear the saved session. |
 | `whoami`        | Report the current login state (user id, device, homeserver, joined-room count). |
 | `sync`          | Run a single sync to refresh the local room list and state. |
 | `list_rooms`    | List joined rooms with id, name, topic, and encryption state. |
-| `send_message`  | Send a text message to a room (plain text or Markdown). |
-| `read_messages` | Read the most recent messages from a room, in chronological order. |
+| `send_message`  | Send a text message to a room (plain text or Markdown), optionally as a rich reply. |
+| `edit_message`  | Edit a previously-sent message (sender only). |
+| `redact_event`  | Redact (delete) a message, or a reaction to un-react. |
+| `send_reaction` | React to a message with an emoji. |
+| `mark_read`     | Mark a room as read up to a given event, or the latest message. |
+| `read_messages` | Read messages from a room, in chronological order, with pagination via `before_token`/`next_token`. |
+| `get_room_members` | List a room's members with display name, membership state, and power level. |
 | `join_room`     | Join a room by id (`!room:server`) or alias (`#room:server`). |
+| `create_room`   | Create a room, optionally with a name, topic, invites, public visibility, encryption, or as a DM. |
+| `invite_user`   | Invite a user to a room. |
+| `leave_room`    | Leave a room. |
+| `kick_room_member` | Kick a member from a room, optionally with a reason. |
+| `ban_room_member`  | Ban a member from a room, optionally with a reason. |
+| `unban_room_member`| Unban a previously-banned member. |
+| `update_room`   | Update a room's name and/or topic. |
+| `create_dm`     | Get or create a direct-message room with a user. |
+| `get_profile`   | Look up a user's display name and avatar (defaults to the logged-in user). |
+| `send_file`     | Upload a local file and send it as an image, audio, video, or generic attachment. |
+| `download_media`| Download the media attached to a message event to a local path. |
 
 ## Configuration
 
@@ -39,7 +60,10 @@ can also authenticate at runtime with the `login` tool.
 | `MATRIX_HOMESERVER`  | Default homeserver URL, e.g. `https://matrix.org`. |
 | `MATRIX_USER`        | Username for automatic login at startup. |
 | `MATRIX_PASSWORD`    | Password for automatic login at startup. |
-| `MATRIX_DEVICE_NAME` | Device display name (default `matrix-mcp`). |
+| `MATRIX_ACCESS_TOKEN`| Pre-obtained access token for automatic login at startup, for SSO/OAuth-only homeservers (see below). Requires `MATRIX_USER_ID` and `MATRIX_DEVICE_ID` too. |
+| `MATRIX_USER_ID`     | Full user id (e.g. `@alice:matrix.org`) matching `MATRIX_ACCESS_TOKEN`. |
+| `MATRIX_DEVICE_ID`   | Device id the access token was issued for. |
+| `MATRIX_DEVICE_NAME` | Device display name (default `matrix-mcp`), used only for password login. |
 | `MATRIX_SESSION_FILE`| Path to persist the session (default: `$XDG_STATE_HOME/matrix-mcp/session.json`, falling back to `~/.local/state/matrix-mcp/session.json`). |
 | `MATRIX_STORE_PATH`  | Directory for the SQLite crypto/state store, where E2EE keys and room state persist (default: a `store` directory next to the session file). |
 | `MATRIX_MCP_TRANSPORT` | Transport to serve: `stdio` (default) or `http`/`sse`. |
@@ -47,8 +71,42 @@ can also authenticate at runtime with the `login` tool.
 | `MATRIX_MCP_PATH`    | URL path for the HTTP/SSE endpoint (default `/mcp`). |
 | `RUST_LOG`           | Log filter, e.g. `matrix_mcp=debug,matrix_sdk=info`. Logs go to stderr. |
 
-On startup the server tries to restore a saved session; if none exists and
-`MATRIX_USER`/`MATRIX_PASSWORD` are set, it performs a password login.
+On startup the server tries to restore a saved session; if none exists, it
+performs a password login when `MATRIX_USER`/`MATRIX_PASSWORD` are set, or an
+access-token login when `MATRIX_ACCESS_TOKEN`/`MATRIX_USER_ID`/`MATRIX_DEVICE_ID`
+are set (password login takes priority if both are configured).
+
+### SSO / OAuth-only homeservers
+
+`login` (username + password) doesn't work against a homeserver that requires
+SSO for interactive login. There are two ways to authenticate against one
+instead:
+
+- **`login_sso`, for a human at the keyboard.** It opens a local callback
+  listener on `localhost` (a random port in `20000..30000`), asks the
+  homeserver for an SSO login URL, and opens that URL in your default browser
+  (best-effort — if it can't, the URL is returned in the result so you can
+  open it yourself). The tool call blocks for up to 5 minutes while you
+  complete the sign-in in the browser; once you do, the homeserver redirects
+  back to the local listener with a one-time token that's exchanged for a
+  real session — server-issued, on a fresh device id, no manual token-copying
+  involved. This is the easiest path for onboarding people onto a shared
+  matrix-mcp deployment: each person just runs `login_sso` and signs in with
+  their own SSO/IdP flow like they normally would.
+- **`login_with_token` (or the `MATRIX_ACCESS_TOKEN` env vars), for headless
+  or automated setups** where nothing can open a browser at all (e.g. a
+  server-side deployment with no display) — supply a token obtained some
+  other way:
+  - **Preferred: mint one via your homeserver's admin API**, if you have
+    admin access (e.g. Synapse's `POST /_synapse/admin/v1/users/<user_id>/login`).
+    This creates a fresh device too, so it won't collide with any client
+    you're already using.
+  - **Or copy one out of an already-logged-in client** (e.g. in Element web:
+    Settings → Help & About → Advanced → Access Token). This works, but the
+    token is tied to that client's existing device id — reusing it here means
+    matrix-mcp and that client share one device identity, which will cause
+    encryption state conflicts in encrypted rooms. Fine for unencrypted rooms
+    or short-lived use; avoid it as a long-term setup.
 
 ## Transports
 
@@ -192,8 +250,12 @@ without it the publish step is skipped cleanly.
 
 ## Limitations
 
-- Room history is fetched on demand rather than cached into a local timeline.
+- Room history is fetched on demand rather than cached into a local timeline
+  (`read_messages` supports paging further back via `before_token`/`next_token`,
+  but there's no persistent local cache across calls).
 - No interactive device verification / cross-signing (see above).
+- `send_file`/`download_media` read from and write to the local filesystem the
+  server process runs on, not the MCP client's.
 
 ## License
 
