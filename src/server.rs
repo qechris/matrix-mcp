@@ -62,6 +62,31 @@ pub struct LoginSsoArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct EnableKeyBackupArgs {
+    #[schemars(
+        description = "Optional passphrase to protect the backup with, in addition to the \
+        generated recovery key. Either can then be used to restore."
+    )]
+    pub passphrase: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RestoreKeyBackupArgs {
+    #[schemars(
+        description = "The account's recovery key (also called a security key, e.g. \
+        \"EsTx xxxx xxxx ...\") or security passphrase. In Element: Settings > Encryption \
+        (or Security & Privacy). This is not the account password."
+    )]
+    pub recovery_key: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DownloadRoomKeysArgs {
+    #[schemars(description = "Room id to fetch historical keys for, e.g. !abc123:matrix.org.")]
+    pub room_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SendMessageArgs {
     #[schemars(description = "Target room id, e.g. !abc123:matrix.org.")]
     pub room_id: String,
@@ -356,6 +381,57 @@ impl MatrixServer {
     async fn sync(&self) -> Result<CallToolResult, ErrorData> {
         self.matrix.sync().await.map_err(err)?;
         json_result(serde_json::json!({ "synced": true }))
+    }
+
+    #[tool(
+        description = "Set up a server-side key backup for this account and upload this device's \
+        room keys, returning a newly generated recovery key. Use this when the account has no \
+        backup yet. The recovery key is shown once and cannot be recovered - save it."
+    )]
+    async fn enable_key_backup(
+        &self,
+        Parameters(args): Parameters<EnableKeyBackupArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let result = self
+            .matrix
+            .enable_key_backup(args.passphrase.as_deref())
+            .await
+            .map_err(err)?;
+        json_result(result)
+    }
+
+    #[tool(
+        description = "Unlock the server-side key backup with a recovery key, so encrypted \
+        messages sent before this device existed can be decrypted. Needed once per device; \
+        after this, reading a room automatically pulls its historical keys."
+    )]
+    async fn restore_key_backup(
+        &self,
+        Parameters(args): Parameters<RestoreKeyBackupArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let result = self
+            .matrix
+            .restore_key_backup(&args.recovery_key)
+            .await
+            .map_err(err)?;
+        json_result(result)
+    }
+
+    #[tool(
+        description = "Download a room's historical message keys from the server-side key backup. \
+        Requires `restore_key_backup` to have been run first. `read_messages` does this \
+        automatically when it hits undecryptable messages, so this is mainly for forcing a refresh."
+    )]
+    async fn download_room_keys(
+        &self,
+        Parameters(args): Parameters<DownloadRoomKeysArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let result = self
+            .matrix
+            .download_room_keys(&args.room_id)
+            .await
+            .map_err(err)?;
+        json_result(result)
     }
 
     #[tool(

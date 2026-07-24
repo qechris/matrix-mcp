@@ -11,6 +11,7 @@ use matrix_sdk::{
     attachment::AttachmentConfig,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
+    encryption::backups::BackupState,
     media::{MediaFormat, MediaRequestParameters},
     room::{
         edit::EditedContent,
@@ -51,6 +52,10 @@ const SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// How long `login_sso` waits for the user to complete the browser flow
 /// before giving up and tearing down the local callback server.
 const SSO_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// How long to wait for pending room keys to finish uploading to the key
+/// backup before giving up and letting a later sync retry.
+const BACKUP_UPLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Sync settings for an on-demand, one-shot refresh. The default
 /// [`SyncSettings`] long-poll (30s) for new events; we instead use a zero
@@ -431,7 +436,133 @@ impl MatrixManager {
             .await
             .context("sync timed out")?
             .context("sync failed")?;
+        Self::flush_key_backup(&client).await;
         Ok(())
+    }
+
+    /// Push any room keys this device holds but hasn't backed up yet to the
+    /// server-side key backup. The SDK only triggers this in the background,
+    /// which a short-lived process can exit before completing - leaving keys
+    /// out of the backup and messages unreadable on the account's next device.
+    /// Best-effort: backups may not be set up, and failing to upload must not
+    /// fail the caller's actual operation.
+    async fn flush_key_backup(client: &Client) {
+        let backups = client.encryption().backups();
+        if backups.state() != BackupState::Enabled {
+            return;
+        }
+        match tokio::time::timeout(BACKUP_UPLOAD_TIMEOUT, backups.wait_for_steady_state()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!("could not upload room keys to the key backup: {e:?}"),
+            Err(_) => tracing::warn!(
+                "timed out uploading room keys to the key backup; they will be retried on the \
+                 next sync"
+            ),
+        }
+    }
+
+    /// Set up a server-side key backup for this account and upload the room
+    /// keys this device holds, returning the newly generated recovery key.
+    /// That key is shown exactly once and cannot be recovered afterwards - it
+    /// is what future devices pass to `restore_key_backup`.
+    pub async fn enable_key_backup(&self, passphrase: Option<&str>) -> Result<Value> {
+        let client = self.connected_client().await?;
+        let recovery = client.encryption().recovery();
+
+        // The SDK happily creates a *second* secret store when this device
+        // already has backups enabled, which silently invalidates the recovery
+        // key the account was previously given. Refuse instead - rotating a
+        // recovery key someone may have saved is not something to do by
+        // accident.
+        if client
+            .encryption()
+            .backups()
+            .exists_on_server()
+            .await
+            .unwrap_or(false)
+        {
+            return Err(anyhow!(
+                "this account already has a key backup - use `restore_key_backup` with its \
+                 existing recovery key. Creating a new one would invalidate the old key and \
+                 strand the keys already backed up under it."
+            ));
+        }
+
+        let mut enable = recovery.enable().wait_for_backups_to_upload();
+        if let Some(passphrase) = passphrase {
+            enable = enable.with_passphrase(passphrase);
+        }
+        let recovery_key = enable.await.context(
+            "failed to enable key backup - if a backup already exists on the account, use \
+             `restore_key_backup` with its existing recovery key instead",
+        )?;
+
+        Ok(json!({
+            "enabled": true,
+            "recovery_key": recovery_key,
+            "backup_state": format!("{:?}", client.encryption().backups().state()),
+            "warning": "Store this recovery key somewhere safe now - it is not recoverable and \
+                        will not be shown again. Without it, messages in encrypted rooms cannot \
+                        be read on a new device.",
+        }))
+    }
+
+    /// Unlock the server-side key backup with a recovery key (also called a
+    /// security key or passphrase), importing the cross-signing and backup
+    /// decryption secrets from secret storage. This is what makes messages
+    /// sent *before* this device existed decryptable: their room keys live in
+    /// the backup, encrypted with this key.
+    pub async fn restore_key_backup(&self, recovery_key: &str) -> Result<Value> {
+        let client = self.connected_client().await?;
+        client
+            .encryption()
+            .recovery()
+            .recover(recovery_key)
+            .await
+            .context(
+                "failed to unlock the key backup - check the recovery key is correct, and that \
+                 key backup is actually set up on this account",
+            )?;
+        // Backups are resumed during sync, so settle the state before reporting it.
+        let _ = client.sync_once(refresh_sync_settings()).await;
+
+        let backup_state = client.encryption().backups().state();
+        Ok(json!({
+            "restored": true,
+            "recovery_state": format!("{:?}", client.encryption().recovery().state()),
+            "backup_state": format!("{backup_state:?}"),
+            // `recover` succeeds even when it finds no usable backup version, so
+            // say plainly whether historical keys can actually be fetched now.
+            "key_backup_usable": backup_state == BackupState::Enabled,
+        }))
+    }
+
+    /// Download this room's historical megolm keys from the server-side key
+    /// backup, so previously undecryptable messages can be read. Requires the
+    /// backup to have been unlocked first (see `restore_key_backup`).
+    pub async fn download_room_keys(&self, room_id: &str) -> Result<Value> {
+        let client = self.connected_client().await?;
+        let room = Self::resolve_room(&client, room_id)?;
+        let backups = client.encryption().backups();
+        let backup_state = backups.state();
+
+        backups
+            .download_room_keys_for_room(room.room_id())
+            .await
+            .context("failed to download room keys from the key backup")?;
+
+        Ok(json!({
+            "room_id": room_id,
+            "backup_state": format!("{backup_state:?}"),
+            // The SDK reports success even when no backup key is available and
+            // nothing was fetched, so don't claim more than we know.
+            "key_backup_usable": backup_state == BackupState::Enabled,
+            "hint": if backup_state == BackupState::Enabled {
+                "Keys downloaded; re-read the room to pick up newly decryptable messages."
+            } else {
+                "No usable key backup - run `restore_key_backup` with your recovery key first."
+            },
+        }))
     }
 
     /// Report the current login state. Never errors so it can be used to probe
@@ -444,6 +575,9 @@ impl MatrixManager {
                 "device_id": client.device_id().map(ToString::to_string),
                 "homeserver": client.homeserver().to_string(),
                 "joined_rooms": client.joined_rooms().len(),
+                // Whether historical (pre-this-device) encrypted messages can be
+                // decrypted, which is the usual reason reads come back empty.
+                "key_backup": format!("{:?}", client.encryption().backups().state()),
             }),
             None => json!({
                 "logged_in": false,
@@ -946,43 +1080,90 @@ impl MatrixManager {
         let client = self.connected_client().await?;
         let room = Self::resolve_room(&client, room_id)?;
 
-        let mut options = MessagesOptions::backward();
-        options.limit = limit.into();
-        options.from = before_token.map(str::to_owned);
-        let response = room
-            .messages(options)
+        // `MessagesOptions` isn't `Clone`, and a retry has to request the exact
+        // same page, so build it from scratch each time.
+        let build_options = || {
+            let mut options = MessagesOptions::backward();
+            options.limit = limit.into();
+            options.from = before_token.map(str::to_owned);
+            options
+        };
+
+        let mut response = room
+            .messages(build_options())
             .await
             .context("failed to fetch messages")?;
+
+        // Messages sent before this device existed are encrypted with keys it
+        // never received. Those keys live in the server-side key backup, so if
+        // the backup is unlocked, pull them and decode the same page again.
+        // `messages()` decrypts on every call against the current key store and
+        // caches nothing, so the second pass sees the freshly imported keys.
+        let mut recovered_from_backup = false;
+        if response.chunk.iter().any(Self::is_undecryptable)
+            && client.encryption().backups().state() == BackupState::Enabled
+            && client
+                .encryption()
+                .backups()
+                .download_room_keys_for_room(room.room_id())
+                .await
+                .is_ok()
+        {
+            if let Ok(retried) = room.messages(build_options()).await {
+                recovered_from_backup = true;
+                response = retried;
+            }
+        }
 
         let mut messages = Vec::new();
         for event in &response.chunk {
             // With e2e-encryption enabled, `messages()` decrypts events in
             // place, so `raw()` already yields plaintext for events we have
-            // keys for. Events we could not decrypt remain `m.room.encrypted`.
+            // keys for.
             let value: Value = match serde_json::from_str(event.raw().json().get()) {
                 Ok(value) => value,
                 Err(_) => continue,
             };
-            let event_type = value.get("type").and_then(Value::as_str);
-            let unable_to_decrypt = event_type == Some("m.room.encrypted");
             messages.push(json!({
-                "type": event_type,
+                "type": value.get("type").and_then(Value::as_str),
                 "sender": value.get("sender").and_then(Value::as_str),
                 "event_id": value.get("event_id").and_then(Value::as_str),
                 "origin_server_ts": value.get("origin_server_ts").cloned().unwrap_or(Value::Null),
                 "msgtype": value.pointer("/content/msgtype").and_then(Value::as_str),
                 "body": value.pointer("/content/body").and_then(Value::as_str),
-                "unable_to_decrypt": unable_to_decrypt,
+                "unable_to_decrypt": Self::is_undecryptable(event),
             }));
         }
         // `backward` yields newest-first; reverse for chronological reading.
         messages.reverse();
+        let undecryptable = messages
+            .iter()
+            .filter(|m| m["unable_to_decrypt"] == Value::Bool(true))
+            .count();
         Ok(json!({
             "room_id": room_id,
             "count": messages.len(),
             "messages": messages,
             "next_token": response.end,
+            "undecryptable_count": undecryptable,
+            "recovered_keys_from_backup": recovered_from_backup,
+            "hint": (undecryptable > 0).then_some(
+                "Some messages could not be decrypted. If they predate this device, unlock the \
+                 server-side key backup with `restore_key_backup` (needs your recovery key).",
+            ),
         }))
+    }
+
+    /// Whether an event could not be decrypted. Prefers the SDK's own flag, but
+    /// also catches events left as raw `m.room.encrypted` when decryption was
+    /// never attempted (e.g. no crypto store), which the flag alone misses.
+    fn is_undecryptable(event: &matrix_sdk::deserialized_responses::TimelineEvent) -> bool {
+        event.kind.is_utd()
+            || serde_json::from_str::<Value>(event.raw().json().get())
+                .ok()
+                .and_then(|v| v.get("type").and_then(Value::as_str).map(str::to_owned))
+                .as_deref()
+                == Some("m.room.encrypted")
     }
 
     /// Join a room by its id (`!room:server`) or alias (`#room:server`).
