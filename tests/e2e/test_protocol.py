@@ -5,12 +5,31 @@ from mcp_client import MCPError
 
 EXPECTED_TOOLS = {
     "login",
+    "login_with_token",
+    "login_sso",
     "whoami",
     "sync",
     "list_rooms",
     "send_message",
     "read_messages",
     "join_room",
+    "logout",
+    "edit_message",
+    "redact_event",
+    "send_reaction",
+    "mark_read",
+    "get_room_members",
+    "create_room",
+    "invite_user",
+    "leave_room",
+    "kick_room_member",
+    "ban_room_member",
+    "unban_room_member",
+    "update_room",
+    "create_dm",
+    "get_profile",
+    "send_file",
+    "download_media",
 }
 
 
