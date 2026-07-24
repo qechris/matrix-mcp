@@ -36,9 +36,11 @@ MATRIX_MCP_BIN=$PWD/target/release/matrix-mcp \
 | File | Coverage |
 |------|----------|
 | `test_protocol.py` | `initialize` serverInfo, `tools/list` shape, pre-login `whoami`, protected-tool error |
-| `test_auth.py` | login success/failure, `whoami`, session persistence across a process restart |
-| `test_rooms.py` | `list_rooms` contents, join by id / alias / invalid |
-| `test_messaging.py` | plaintext send+read, Markdown formatting, `read_messages` limit + chronological order |
+| `test_auth.py` | login success/failure, `whoami`, session persistence across a restart, `logout` |
+| `test_rooms.py` | `list_rooms`, join by id/alias/invalid, `get_room_members`, `create_room`, `invite_user`, `leave_room`, kick/ban/unban, `update_room` |
+| `test_messaging.py` | plaintext send+read, Markdown, `read_messages` limit/order/pagination, `edit_message`, `redact_event`, `send_reaction`, replies, `mark_read` |
+| `test_dm.py` | `create_dm` creation + reuse, `get_profile` for self and other users |
+| `test_media.py` | `send_file` (with/without caption), `download_media` round-trip, non-media event rejection |
 | `test_e2ee.py` | cross-device E2EE both directions, encrypted-room reporting |
 | `test_transport.py` | SSE/streamable-HTTP `initialize` over HTTP |
 
