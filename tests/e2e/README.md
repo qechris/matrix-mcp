@@ -42,6 +42,7 @@ MATRIX_MCP_BIN=$PWD/target/release/matrix-mcp \
 | `test_dm.py` | `create_dm` creation + reuse, `get_profile` for self and other users |
 | `test_media.py` | `send_file` (with/without caption), `download_media` round-trip, non-media event rejection |
 | `test_e2ee.py` | cross-device E2EE both directions, encrypted-room reporting |
+| `test_key_backup.py` | `enable_key_backup` (incl. refusing to overwrite an existing backup), `restore_key_backup`, `download_room_keys`, and a full round-trip proving a second device reads history it never had keys for |
 | `test_transport.py` | SSE/streamable-HTTP `initialize` over HTTP |
 
 ## Layout

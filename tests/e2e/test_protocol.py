@@ -30,6 +30,9 @@ EXPECTED_TOOLS = {
     "get_profile",
     "send_file",
     "download_media",
+    "enable_key_backup",
+    "restore_key_backup",
+    "download_room_keys",
 }
 
 
