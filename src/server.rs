@@ -435,6 +435,58 @@ impl MatrixServer {
     }
 
     #[tool(
+        description = "Start verifying this device against your other, already-verified session \
+        (e.g. Element). Sends the verification request that session is waiting for and returns \
+        emoji to compare. Once verified, this device is gossiped the keys to read history - no \
+        recovery key needed. This call blocks until the emoji are ready; then compare them and \
+        call confirm_device_verification (or cancel_device_verification if they differ)."
+    )]
+    async fn start_device_verification(&self) -> Result<CallToolResult, ErrorData> {
+        let result = self.matrix.start_device_verification().await.map_err(err)?;
+        json_result(result)
+    }
+
+    #[tool(
+        description = "Continue an in-progress device verification: after you've accepted the \
+        request in your other session, this fetches the emoji to compare. Returns status \
+        \"pending\" if the other session hasn't accepted yet - just call it again."
+    )]
+    async fn continue_device_verification(&self) -> Result<CallToolResult, ErrorData> {
+        let result = self
+            .matrix
+            .continue_device_verification()
+            .await
+            .map_err(err)?;
+        json_result(result)
+    }
+
+    #[tool(
+        description = "Confirm the emoji from start_device_verification match your other session, \
+        completing verification. Afterwards this device receives the cross-signing secrets and \
+        key-backup key automatically and can read encrypted history."
+    )]
+    async fn confirm_device_verification(&self) -> Result<CallToolResult, ErrorData> {
+        let result = self
+            .matrix
+            .confirm_device_verification()
+            .await
+            .map_err(err)?;
+        json_result(result)
+    }
+
+    #[tool(
+        description = "Abort an in-progress device verification (e.g. the emoji did not match)."
+    )]
+    async fn cancel_device_verification(&self) -> Result<CallToolResult, ErrorData> {
+        let result = self
+            .matrix
+            .cancel_device_verification()
+            .await
+            .map_err(err)?;
+        json_result(result)
+    }
+
+    #[tool(
         description = "List the rooms the logged-in account has joined, with id, name, topic, and encryption state."
     )]
     async fn list_rooms(&self) -> Result<CallToolResult, ErrorData> {

@@ -11,7 +11,10 @@ use matrix_sdk::{
     attachment::AttachmentConfig,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
-    encryption::backups::BackupState,
+    encryption::{
+        backups::BackupState,
+        verification::{SasState, SasVerification, VerificationRequest, VerificationRequestState},
+    },
     media::{MediaFormat, MediaRequestParameters},
     room::{
         edit::EditedContent,
@@ -57,6 +60,22 @@ const SSO_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30
 /// backup before giving up and letting a later sync retry.
 const BACKUP_UPLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Per-call budget for a verification step to make progress before returning
+/// "still pending" so the caller can poll again. Kept well under a typical MCP
+/// client's ~60s request timeout, since a single call can't block on slow
+/// human interaction on the other device. Overridable with
+/// `MATRIX_VERIFICATION_TIMEOUT` (seconds).
+const DEFAULT_VERIFICATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
+
+/// After confirming, how long to keep syncing for the other device to gossip
+/// over the cross-signing secrets and backup key. Added to the confirm step's
+/// own budget, still leaving margin under the client request timeout.
+const SECRET_GOSSIP_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Server-side long-poll for each sync while driving verification, so incoming
+/// `m.key.verification.*` to-device events are picked up promptly.
+const VERIFICATION_SYNC_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Sync settings for an on-demand, one-shot refresh. The default
 /// [`SyncSettings`] long-poll (30s) for new events; we instead use a zero
 /// server-side timeout so the call returns the current state promptly while
@@ -92,7 +111,13 @@ pub struct MatrixManager {
     device_name: String,
     session_path: PathBuf,
     store_path: PathBuf,
+    verification_timeout: std::time::Duration,
     client: RwLock<Option<Client>>,
+    /// The in-flight verification request, set by `start_device_verification`
+    /// and advanced by `continue_device_verification` until emoji are ready.
+    pending_verification: RwLock<Option<VerificationRequest>>,
+    /// The SAS awaiting emoji confirmation, once the request reaches it.
+    pending_sas: RwLock<Option<SasVerification>>,
 }
 
 impl MatrixManager {
@@ -108,6 +133,8 @@ impl MatrixManager {
     /// * `MATRIX_SESSION_FILE`- where to persist the session (default under XDG state dir)
     /// * `MATRIX_STORE_PATH`  - directory for the SQLite crypto/state store
     ///   (default: a `store` directory next to the session file)
+    /// * `MATRIX_VERIFICATION_TIMEOUT` - seconds each interactive
+    ///   device-verification poll waits for the other device (default 35)
     pub fn from_env() -> Result<Self> {
         let non_empty = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
 
@@ -125,6 +152,10 @@ impl MatrixManager {
         let store_path = non_empty("MATRIX_STORE_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|| default_store_path(&session_path));
+        let verification_timeout = non_empty("MATRIX_VERIFICATION_TIMEOUT")
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(std::time::Duration::from_secs)
+            .unwrap_or(DEFAULT_VERIFICATION_TIMEOUT);
 
         Ok(Self {
             default_homeserver,
@@ -136,7 +167,10 @@ impl MatrixManager {
             device_name,
             session_path,
             store_path,
+            verification_timeout,
             client: RwLock::new(None),
+            pending_verification: RwLock::new(None),
+            pending_sas: RwLock::new(None),
         })
     }
 
@@ -565,20 +599,321 @@ impl MatrixManager {
         }))
     }
 
+    /// Run one sync tuned for verification: a short server-side long-poll so
+    /// incoming `m.key.verification.*` to-device events arrive promptly, and
+    /// which also flushes our own queued verification messages.
+    async fn verification_sync(client: &Client) -> Result<()> {
+        let settings = SyncSettings::default().timeout(VERIFICATION_SYNC_POLL);
+        tokio::time::timeout(SYNC_TIMEOUT, client.sync_once(settings))
+            .await
+            .context("sync timed out")?
+            .context("sync failed")?;
+        Ok(())
+    }
+
+    /// Begin verifying this device against the user's other, already-verified
+    /// session (e.g. Element). Sends the verification request that session is
+    /// waiting for and briefly drives sync toward the emoji.
+    ///
+    /// Because a single tool call can't block on slow interaction in the other
+    /// app (the MCP client caps request time), this returns as soon as either
+    /// the emoji are ready OR the step budget elapses with the request still
+    /// pending. In the pending case, accept the request in the other session,
+    /// then call `continue_device_verification` to fetch the emoji.
+    ///
+    /// Verifying this way is what lets this device read history: once verified,
+    /// the other device gossips over the cross-signing secrets and the
+    /// key-backup key automatically, with no recovery key to type.
+    pub async fn start_device_verification(&self) -> Result<Value> {
+        let client = self.connected_client().await?;
+        let user_id = client
+            .user_id()
+            .ok_or_else(|| anyhow!("not logged in"))?
+            .to_owned();
+
+        // Make sure the E2EE background tasks (which register the handlers that
+        // auto-import gossiped secrets and enable the backup) are running.
+        client
+            .encryption()
+            .wait_for_e2ee_initialization_tasks()
+            .await;
+
+        // Clear any leftover flow from a previous attempt before starting a new
+        // one; two concurrent requests make the other device cancel.
+        self.clear_pending_verification().await;
+
+        // Our own cross-signing identity is needed to request self-verification;
+        // force a /keys/query if it isn't in the local store yet.
+        let identity = match client
+            .encryption()
+            .get_user_identity(&user_id)
+            .await
+            .context("failed to look up own identity")?
+        {
+            Some(identity) => identity,
+            None => client
+                .encryption()
+                .request_user_identity(&user_id)
+                .await
+                .context("failed to fetch own identity")?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "no cross-signing identity for this account - set up secure backup / \
+                         cross-signing in another client (e.g. Element) first"
+                    )
+                })?,
+        };
+
+        // Sending the request also targets our other devices; the verified one
+        // (Element) accepts it.
+        let request = identity
+            .request_verification()
+            .await
+            .context("failed to send verification request")?;
+        *self.pending_verification.write().await = Some(request);
+
+        self.advance_verification(&client, true).await
+    }
+
+    /// Resume an in-progress verification started with
+    /// `start_device_verification`: drive sync toward the emoji and return them
+    /// once the other device has accepted and keys are exchanged. Call this
+    /// repeatedly until it reports the emoji (or a cancellation).
+    pub async fn continue_device_verification(&self) -> Result<Value> {
+        let client = self.connected_client().await?;
+        if self.pending_verification.read().await.is_none()
+            && self.pending_sas.read().await.is_none()
+        {
+            return Err(anyhow!(
+                "no verification in progress - run `start_device_verification` first"
+            ));
+        }
+        self.advance_verification(&client, false).await
+    }
+
+    /// Drive the pending verification for up to one step budget: move the
+    /// request to Ready, start the SAS, and wait for keys to be exchanged.
+    /// Returns the emoji if they become ready within the budget, otherwise a
+    /// "pending" status so the caller can poll again.
+    async fn advance_verification(&self, client: &Client, just_started: bool) -> Result<Value> {
+        let request = self.pending_verification.read().await.clone();
+        let mut sas = self.pending_sas.read().await.clone();
+
+        let outcome = tokio::time::timeout(self.verification_timeout, async {
+            loop {
+                // Obtain the SAS once the request is ready / has transitioned.
+                if sas.is_none() {
+                    if let Some(request) = &request {
+                        match request.state() {
+                            VerificationRequestState::Transitioned { verification } => {
+                                sas = verification.sas();
+                            }
+                            VerificationRequestState::Cancelled(info) => {
+                                return Err(anyhow!("the other device cancelled: {info:?}"));
+                            }
+                            VerificationRequestState::Done => {
+                                return Err(anyhow!(
+                                    "verification finished before emoji were shown"
+                                ));
+                            }
+                            _ if request.is_ready() => {
+                                sas = request
+                                    .start_sas()
+                                    .await
+                                    .context("failed to start emoji verification")?;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Once we have a SAS, wait for the emoji.
+                if let Some(sas) = &sas {
+                    match sas.state() {
+                        SasState::KeysExchanged { .. } | SasState::Done { .. } => {
+                            return Ok(true);
+                        }
+                        SasState::Cancelled(info) => {
+                            return Err(anyhow!("verification was cancelled: {info:?}"));
+                        }
+                        _ => {}
+                    }
+                }
+
+                Self::verification_sync(client).await?;
+            }
+        })
+        .await;
+
+        // Persist whatever progress we made so a follow-up call can resume.
+        *self.pending_sas.write().await = sas.clone();
+
+        match outcome {
+            // Cancelled / hard error: tear the flow down so a retry starts clean.
+            Ok(Err(e)) => {
+                self.clear_pending_verification().await;
+                Err(e)
+            }
+            // Emoji ready.
+            Ok(Ok(_)) => {
+                let sas = sas.expect("SAS present when emoji are ready");
+                let emoji = sas.emoji().map(|emojis| {
+                    emojis
+                        .iter()
+                        .map(|e| json!({ "symbol": e.symbol, "description": e.description }))
+                        .collect::<Vec<_>>()
+                });
+                let decimals = sas.decimals().map(|(a, b, c)| [a, b, c]);
+                Ok(json!({
+                    "status": "awaiting_confirmation",
+                    "emoji": emoji,
+                    "decimals": decimals,
+                    "instructions": "Compare these against what your other session shows. If they \
+                        match, call `confirm_device_verification`; if not, call \
+                        `cancel_device_verification`.",
+                }))
+            }
+            // Budget elapsed, still waiting on the other device.
+            Err(_) => Ok(json!({
+                "status": "pending",
+                "instructions": if just_started {
+                    "Accept the verification request in your other session (e.g. Element), then \
+                     call `continue_device_verification` to fetch the emoji."
+                } else {
+                    "Still waiting for the other session to accept - accept the request there, \
+                     then call `continue_device_verification` again."
+                },
+            })),
+        }
+    }
+
+    /// Confirm that the emoji from the start/continue step match the other
+    /// device, completing the verification. Afterwards, drives sync so the
+    /// other device can gossip over the cross-signing secrets and key-backup
+    /// key, and reports whether this device is now verified and can read
+    /// history.
+    pub async fn confirm_device_verification(&self) -> Result<Value> {
+        let client = self.connected_client().await?;
+        let sas = self.pending_sas.read().await.clone().ok_or_else(|| {
+            anyhow!(
+                "no emoji to confirm yet - run `start_device_verification` (and \
+                 `continue_device_verification`) until it returns emoji first"
+            )
+        })?;
+
+        sas.confirm()
+            .await
+            .context("failed to confirm verification")?;
+
+        let result = tokio::time::timeout(self.verification_timeout, async {
+            loop {
+                if sas.is_done() {
+                    return Ok(());
+                }
+                if sas.is_cancelled() {
+                    return Err(anyhow!("the other device cancelled before completing"));
+                }
+                Self::verification_sync(&client).await?;
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("timed out waiting for the other device to finish verifying"));
+        // The flow is over (or wedged) either way; drop the stored state.
+        self.clear_pending_verification().await;
+        result??;
+
+        // The cross-signing secrets and backup key arrive over the next couple
+        // of syncs via secret gossiping; pump sync until they land (bounded).
+        let _ = tokio::time::timeout(SECRET_GOSSIP_BUDGET, async {
+            loop {
+                let complete = client
+                    .encryption()
+                    .cross_signing_status()
+                    .await
+                    .is_some_and(|s| s.is_complete());
+                if complete {
+                    break;
+                }
+                if Self::verification_sync(&client).await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await;
+
+        let device_verified = match client.encryption().get_own_device().await {
+            Ok(Some(device)) => device.is_cross_signed_by_owner(),
+            _ => false,
+        };
+        let cross_signing_complete = client
+            .encryption()
+            .cross_signing_status()
+            .await
+            .is_some_and(|s| s.is_complete());
+        let backup_state = client.encryption().backups().state();
+
+        Ok(json!({
+            "verified": device_verified,
+            "cross_signing_complete": cross_signing_complete,
+            "backup_state": format!("{backup_state:?}"),
+            "hint": if backup_state == BackupState::Enabled {
+                "This device is verified and the key backup is unlocked - reading a room now \
+                 pulls its history automatically."
+            } else {
+                "This device is verified. If the account has a key backup, its history keys \
+                 should follow shortly; retry a read, or check `whoami`."
+            },
+        }))
+    }
+
+    /// Abort the in-progress device verification (e.g. the emoji didn't match).
+    pub async fn cancel_device_verification(&self) -> Result<Value> {
+        let sas = self.pending_sas.read().await.clone();
+        let request = self.pending_verification.read().await.clone();
+        let had_flow = sas.is_some() || request.is_some();
+        if let Some(sas) = sas {
+            let _ = sas.cancel().await;
+        } else if let Some(request) = request {
+            let _ = request.cancel().await;
+        }
+        self.clear_pending_verification().await;
+        Ok(json!({
+            "cancelled": had_flow,
+            "note": if had_flow { Value::Null } else { json!("no verification was in progress") },
+        }))
+    }
+
+    /// Drop any stored verification request/SAS.
+    async fn clear_pending_verification(&self) {
+        *self.pending_sas.write().await = None;
+        *self.pending_verification.write().await = None;
+    }
+
     /// Report the current login state. Never errors so it can be used to probe
     /// connectivity.
     pub async fn whoami(&self) -> Value {
         match self.client.read().await.clone() {
-            Some(client) => json!({
-                "logged_in": true,
-                "user_id": client.user_id().map(ToString::to_string),
-                "device_id": client.device_id().map(ToString::to_string),
-                "homeserver": client.homeserver().to_string(),
-                "joined_rooms": client.joined_rooms().len(),
-                // Whether historical (pre-this-device) encrypted messages can be
-                // decrypted, which is the usual reason reads come back empty.
-                "key_backup": format!("{:?}", client.encryption().backups().state()),
-            }),
+            Some(client) => {
+                // Whether another session has cross-signed this device; an
+                // unverified device can't be gossiped historical keys.
+                // (`is_verified` alone is true for one's own device by
+                // self-trust, so it's the wrong signal here.)
+                let device_verified = match client.encryption().get_own_device().await {
+                    Ok(Some(device)) => Some(device.is_cross_signed_by_owner()),
+                    _ => None,
+                };
+                json!({
+                    "logged_in": true,
+                    "user_id": client.user_id().map(ToString::to_string),
+                    "device_id": client.device_id().map(ToString::to_string),
+                    "homeserver": client.homeserver().to_string(),
+                    "joined_rooms": client.joined_rooms().len(),
+                    "device_verified": device_verified,
+                    // Whether historical (pre-this-device) encrypted messages can be
+                    // decrypted, which is the usual reason reads come back empty.
+                    "key_backup": format!("{:?}", client.encryption().backups().state()),
+                })
+            }
             None => json!({
                 "logged_in": false,
                 "default_homeserver": self.default_homeserver,
