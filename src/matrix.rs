@@ -463,13 +463,19 @@ impl MatrixManager {
         Ok(())
     }
 
-    /// Run a single sync against the server to refresh local state.
-    pub async fn sync(&self) -> Result<()> {
-        let client = self.connected_client().await?;
-        tokio::time::timeout(SYNC_TIMEOUT, client.sync_once(refresh_sync_settings()))
+    /// Run one `sync_once` with the given settings, bounded by [`SYNC_TIMEOUT`].
+    async fn sync_once_with(client: &Client, settings: SyncSettings) -> Result<()> {
+        tokio::time::timeout(SYNC_TIMEOUT, client.sync_once(settings))
             .await
             .context("sync timed out")?
             .context("sync failed")?;
+        Ok(())
+    }
+
+    /// Run a single sync against the server to refresh local state.
+    pub async fn sync(&self) -> Result<()> {
+        let client = self.connected_client().await?;
+        Self::sync_once_with(&client, refresh_sync_settings()).await?;
         Self::flush_key_backup(&client).await;
         Ok(())
     }
@@ -603,12 +609,22 @@ impl MatrixManager {
     /// incoming `m.key.verification.*` to-device events arrive promptly, and
     /// which also flushes our own queued verification messages.
     async fn verification_sync(client: &Client) -> Result<()> {
-        let settings = SyncSettings::default().timeout(VERIFICATION_SYNC_POLL);
-        tokio::time::timeout(SYNC_TIMEOUT, client.sync_once(settings))
-            .await
-            .context("sync timed out")?
-            .context("sync failed")?;
-        Ok(())
+        Self::sync_once_with(
+            client,
+            SyncSettings::default().timeout(VERIFICATION_SYNC_POLL),
+        )
+        .await
+    }
+
+    /// Whether this device has been cross-signed by the account owner, i.e.
+    /// verified by another session. `None` if the device can't be read.
+    /// (`is_verified` alone is true for one's own device by self-trust, so it's
+    /// the wrong signal - use cross-signing.)
+    async fn own_device_cross_signed(client: &Client) -> Option<bool> {
+        match client.encryption().get_own_device().await {
+            Ok(Some(device)) => Some(device.is_cross_signed_by_owner()),
+            _ => None,
+        }
     }
 
     /// Begin verifying this device against the user's other, already-verified
@@ -824,32 +840,29 @@ impl MatrixManager {
 
         // The cross-signing secrets and backup key arrive over the next couple
         // of syncs via secret gossiping; pump sync until they land (bounded).
-        let _ = tokio::time::timeout(SECRET_GOSSIP_BUDGET, async {
+        // The loop's own result is the completeness we then report - no need to
+        // re-query the status afterwards.
+        let cross_signing_complete = tokio::time::timeout(SECRET_GOSSIP_BUDGET, async {
             loop {
-                let complete = client
+                if client
                     .encryption()
                     .cross_signing_status()
                     .await
-                    .is_some_and(|s| s.is_complete());
-                if complete {
-                    break;
+                    .is_some_and(|s| s.is_complete())
+                {
+                    return true;
                 }
                 if Self::verification_sync(&client).await.is_err() {
-                    break;
+                    return false;
                 }
             }
         })
-        .await;
+        .await
+        .unwrap_or(false);
 
-        let device_verified = match client.encryption().get_own_device().await {
-            Ok(Some(device)) => device.is_cross_signed_by_owner(),
-            _ => false,
-        };
-        let cross_signing_complete = client
-            .encryption()
-            .cross_signing_status()
+        let device_verified = Self::own_device_cross_signed(&client)
             .await
-            .is_some_and(|s| s.is_complete());
+            .unwrap_or(false);
         let backup_state = client.encryption().backups().state();
 
         Ok(json!({
@@ -896,12 +909,7 @@ impl MatrixManager {
             Some(client) => {
                 // Whether another session has cross-signed this device; an
                 // unverified device can't be gossiped historical keys.
-                // (`is_verified` alone is true for one's own device by
-                // self-trust, so it's the wrong signal here.)
-                let device_verified = match client.encryption().get_own_device().await {
-                    Ok(Some(device)) => Some(device.is_cross_signed_by_owner()),
-                    _ => None,
-                };
+                let device_verified = Self::own_device_cross_signed(&client).await;
                 json!({
                     "logged_in": true,
                     "user_id": client.user_id().map(ToString::to_string),
@@ -1435,22 +1443,25 @@ impl MatrixManager {
         // `messages()` decrypts on every call against the current key store and
         // caches nothing, so the second pass sees the freshly imported keys.
         let mut recovered_from_backup = false;
-        if response.chunk.iter().any(Self::is_undecryptable)
-            && client.encryption().backups().state() == BackupState::Enabled
-            && client
+        let needs_recovery = response.chunk.iter().any(Self::is_undecryptable)
+            && client.encryption().backups().state() == BackupState::Enabled;
+        if needs_recovery {
+            let downloaded = client
                 .encryption()
                 .backups()
                 .download_room_keys_for_room(room.room_id())
                 .await
-                .is_ok()
-        {
-            if let Ok(retried) = room.messages(build_options()).await {
-                recovered_from_backup = true;
-                response = retried;
+                .is_ok();
+            if downloaded {
+                if let Ok(retried) = room.messages(build_options()).await {
+                    recovered_from_backup = true;
+                    response = retried;
+                }
             }
         }
 
         let mut messages = Vec::new();
+        let mut undecryptable = 0usize;
         for event in &response.chunk {
             // With e2e-encryption enabled, `messages()` decrypts events in
             // place, so `raw()` already yields plaintext for events we have
@@ -1459,22 +1470,26 @@ impl MatrixManager {
                 Ok(value) => value,
                 Err(_) => continue,
             };
+            let event_type = value.get("type").and_then(Value::as_str);
+            // Reuse the parsed `value` rather than re-parsing via
+            // `is_undecryptable`: an event left as raw `m.room.encrypted` (or
+            // flagged by the SDK) is one we couldn't decrypt.
+            let unable_to_decrypt = event.kind.is_utd() || event_type == Some("m.room.encrypted");
+            if unable_to_decrypt {
+                undecryptable += 1;
+            }
             messages.push(json!({
-                "type": value.get("type").and_then(Value::as_str),
+                "type": event_type,
                 "sender": value.get("sender").and_then(Value::as_str),
                 "event_id": value.get("event_id").and_then(Value::as_str),
                 "origin_server_ts": value.get("origin_server_ts").cloned().unwrap_or(Value::Null),
                 "msgtype": value.pointer("/content/msgtype").and_then(Value::as_str),
                 "body": value.pointer("/content/body").and_then(Value::as_str),
-                "unable_to_decrypt": Self::is_undecryptable(event),
+                "unable_to_decrypt": unable_to_decrypt,
             }));
         }
         // `backward` yields newest-first; reverse for chronological reading.
         messages.reverse();
-        let undecryptable = messages
-            .iter()
-            .filter(|m| m["unable_to_decrypt"] == Value::Bool(true))
-            .count();
         Ok(json!({
             "room_id": room_id,
             "count": messages.len(),

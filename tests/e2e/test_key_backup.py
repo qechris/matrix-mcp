@@ -2,7 +2,7 @@
 device that never received the original room keys."""
 import pytest
 
-from conftest import create_room, read_until
+from conftest import create_room_and_sync, read_until
 from mcp_client import MCPError
 
 
@@ -33,8 +33,7 @@ def test_restore_key_backup_without_backup_fails(logged_in):
 
 def test_download_room_keys_without_backup_reports_unusable(logged_in):
     alice = logged_in("alice")
-    room = create_room(alice.user.token, "No Backup")
-    alice.call_tool("sync")
+    room = create_room_and_sync(alice, "No Backup")
 
     result = alice.call_tool("download_room_keys", {"room_id": room})
     assert result["key_backup_usable"] is False
@@ -52,8 +51,7 @@ def test_new_device_reads_history_after_restoring_backup(mcp, register_user, tmp
     first.user = user
     recovery_key = first.call_tool("enable_key_backup")["recovery_key"]
 
-    room = create_room(user.token, "History", encrypted=True)
-    first.call_tool("sync")
+    room = create_room_and_sync(first, "History", encrypted=True)
     first.call_tool("send_message", {"room_id": room, "body": "sent before device 2 existed"})
     # Push the room key into the backup before the device goes away.
     first.call_tool("sync")
