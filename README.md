@@ -14,7 +14,7 @@ official SDKs:
 - [`matrix-sdk`](https://crates.io/crates/matrix-sdk) — the official Matrix Rust
   SDK
 
-It lets an MCP client (Claude, or any other MCP-capable assistant) log in to a
+It lets any MCP-capable assistant log in to a
 Matrix homeserver and drive most of what a full chat client can do: manage
 rooms and their membership, send and edit messages, react and reply, exchange
 files and images, look up profiles, and hold direct-message conversations.
@@ -142,18 +142,8 @@ from source, so a C compiler is required for the build).
 
 ## Use with an MCP client
 
-The server speaks MCP over stdio. Register it with your client, for example for
-Claude Code:
-
-```sh
-claude mcp add matrix \
-  --env MATRIX_HOMESERVER=https://matrix.org \
-  --env MATRIX_USER=alice \
-  --env MATRIX_PASSWORD=... \
-  -- /path/to/target/release/matrix-mcp
-```
-
-Or, equivalently, an entry in an MCP `servers` configuration:
+The server speaks MCP over stdio. Register it with your MCP client — for most
+clients, an entry in an MCP `servers` configuration:
 
 ```json
 {
