@@ -33,6 +33,10 @@ EXPECTED_TOOLS = {
     "enable_key_backup",
     "restore_key_backup",
     "download_room_keys",
+    "start_device_verification",
+    "continue_device_verification",
+    "confirm_device_verification",
+    "cancel_device_verification",
 }
 
 
