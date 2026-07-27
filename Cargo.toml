@@ -12,7 +12,7 @@ categories = ["command-line-utilities"]
 [dependencies]
 # Official MCP Rust SDK: server runtime + stdio and streamable-HTTP/SSE
 # transports + #[tool] macros.
-rmcp = { version = "1.7", features = [
+rmcp = { version = "2.2", features = [
     "server",
     "transport-io",
     "transport-streamable-http-server",
