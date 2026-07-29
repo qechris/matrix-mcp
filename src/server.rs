@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router, ErrorData, ServerHandler,
 };
 use serde::Deserialize;
@@ -275,7 +275,7 @@ impl MatrixServer {
 /// Wrap a serde_json value as a pretty-printed text result.
 fn json_result(value: Value) -> Result<CallToolResult, ErrorData> {
     let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
-    Ok(CallToolResult::success(vec![Content::text(text)]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
 
 /// Convert an internal error into an MCP tool error.
