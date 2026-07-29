@@ -21,16 +21,27 @@ files and images, look up profiles, and hold direct-message conversations.
 
 ## How to use
 
-A quick path from a fresh checkout to chatting through your MCP-capable
-assistant, with this device verified for encrypted rooms.
+A quick path from install to chatting through your MCP-capable assistant,
+with this device verified for encrypted rooms.
 
-### 1. Build it
+### 1. Get the binary
+
+**Prebuilt (recommended):** download the archive for your architecture
+(`x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`) from the
+[latest release](https://github.com/qechris/matrix-mcp/releases/latest),
+along with its `.sha256` file, then verify and extract:
 
 ```sh
-cargo build --release
+sha256sum -c matrix-mcp-*.sha256
+tar -xzf matrix-mcp-*.tar.gz
 ```
 
-This produces `target/release/matrix-mcp` — see [Build](#build) for details.
+This unpacks a `matrix-mcp` binary alongside `README.md` and `LICENSE`.
+
+**From source:** `cargo build --release` — see [Build](#build).
+
+**Container image:** `ghcr.io/qechris/matrix-mcp` — see
+[Container image](#container-image).
 
 ### 2. Register it with your MCP client
 
@@ -41,7 +52,7 @@ configuration:
 {
   "mcpServers": {
     "matrix": {
-      "command": "/path/to/target/release/matrix-mcp",
+      "command": "/path/to/matrix-mcp",
       "env": {
         "MATRIX_HOMESERVER": "https://matrix.org"
       }
