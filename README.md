@@ -19,6 +19,99 @@ Matrix homeserver and drive most of what a full chat client can do: manage
 rooms and their membership, send and edit messages, react and reply, exchange
 files and images, look up profiles, and hold direct-message conversations.
 
+## How to use
+
+A quick path from a fresh checkout to chatting through your MCP-capable
+assistant, with this device verified for encrypted rooms.
+
+### 1. Build it
+
+```sh
+cargo build --release
+```
+
+This produces `target/release/matrix-mcp` — see [Build](#build) for details.
+
+### 2. Register it with your MCP client
+
+The server speaks MCP over stdio. Add an entry to your MCP client's server
+configuration:
+
+```json
+{
+  "mcpServers": {
+    "matrix": {
+      "command": "/path/to/target/release/matrix-mcp",
+      "env": {
+        "MATRIX_HOMESERVER": "https://matrix.org"
+      }
+    }
+  }
+}
+```
+
+You can bake `MATRIX_USER`/`MATRIX_PASSWORD` into `env` for automatic login at
+startup (see [Configuration](#configuration)), or skip that and log in
+interactively in the next step instead.
+
+### 3. Log in
+
+Ask your assistant to run `whoami`. If it reports `"logged_in": false`, log in:
+
+- **Normal username/password homeserver:** ask it to run `login` with your
+  username and password.
+- **SSO/OAuth-only homeserver:** ask it to run `login_sso` instead — it opens
+  your browser to finish signing in and completes automatically. See
+  [SSO / OAuth-only homeservers](#sso--oauth-only-homeservers) for headless
+  alternatives.
+
+The session is saved to disk, so you won't need to log in again on the next
+start.
+
+### 4. Try the basics
+
+With a logged-in session, just ask your assistant in plain language — it maps
+these to tool calls:
+
+- "List my rooms" → `list_rooms`
+- "Send 'hello' to #general:matrix.org" → `send_message`
+- "What's been said in that room recently?" → `read_messages`
+- "React to that with a thumbs up" → `send_reaction`
+- "Start a DM with @bob:matrix.org" → `create_dm`
+
+### 5. Verifying this device to unlock encrypted history
+
+A brand-new device can send and receive encrypted messages right away, but it
+starts out **unverified**: other users' clients will flag it as untrusted, and
+it can't read messages sent before it existed. Fix both by verifying it
+against another session you already trust (e.g. Element), using emoji/SAS
+verification — no recovery key needed:
+
+1. Ask your assistant to run `start_device_verification`. This sends a
+   verification request to your other, already-verified session and waits
+   (up to `MATRIX_VERIFICATION_TIMEOUT` seconds, default 35) for emoji to
+   compare.
+2. Open that other session (e.g. Element) and accept the incoming
+   verification request.
+3. If `start_device_verification` returned a `"pending"` status because the
+   other session hadn't accepted in time, ask your assistant to run
+   `continue_device_verification` — repeat until it returns emoji.
+4. Compare the emoji shown here against the emoji shown in the other session.
+   - **They match:** run `confirm_device_verification`. This device is now
+     cross-signed, and the other device gossips it the cross-signing secrets
+     and key-backup key automatically — no recovery key to type.
+   - **They don't match:** run `cancel_device_verification` and investigate;
+     don't confirm.
+
+This requires the account to already have a cross-signing identity (set one
+up in another client first if it doesn't) and only verifies this device
+against *your own* other sessions — see [Limitations](#limitations).
+
+If you'd rather not do the interactive dance (e.g. a headless deployment),
+`restore_key_backup` with a recovery key achieves the "read old history" half
+without needing another session online — see
+[Reading messages sent before this device existed](#reading-messages-sent-before-this-device-existed).
+
 ## Tools
 
 | Tool            | Description |
@@ -32,6 +125,10 @@ files and images, look up profiles, and hold direct-message conversations.
 | `enable_key_backup` | Set up a server-side key backup and return a new recovery key (for accounts that don't have one). |
 | `restore_key_backup` | Unlock the key backup with a recovery key, making messages sent before this device existed readable. |
 | `download_room_keys` | Force-fetch a room's historical keys from the key backup. |
+| `start_device_verification` | Start interactive (emoji/SAS) verification of this device against your other, already-verified session. Returns emoji to compare, once ready. |
+| `continue_device_verification` | Continue an in-progress device verification, fetching the emoji once the other session has accepted. |
+| `confirm_device_verification` | Confirm the emoji match, completing device verification and cross-signing. |
+| `cancel_device_verification` | Abort an in-progress device verification. |
 | `list_rooms`    | List joined rooms with id, name, topic, and encryption state. |
 | `send_message`  | Send a text message to a room (plain text or Markdown), optionally as a rich reply. |
 | `edit_message`  | Edit a previously-sent message (sender only). |
@@ -69,6 +166,7 @@ can also authenticate at runtime with the `login` tool.
 | `MATRIX_DEVICE_NAME` | Device display name (default `matrix-mcp`), used only for password login. |
 | `MATRIX_SESSION_FILE`| Path to persist the session (default: `$XDG_STATE_HOME/matrix-mcp/session.json`, falling back to `~/.local/state/matrix-mcp/session.json`). |
 | `MATRIX_STORE_PATH`  | Directory for the SQLite crypto/state store, where E2EE keys and room state persist (default: a `store` directory next to the session file). |
+| `MATRIX_VERIFICATION_TIMEOUT` | Seconds each interactive device-verification poll (`start_device_verification`/`continue_device_verification`) waits for the other session before returning `pending` (default `35`). |
 | `MATRIX_MCP_TRANSPORT` | Transport to serve: `stdio` (default) or `http`/`sse`. |
 | `MATRIX_MCP_ADDRESS` | Bind address for the HTTP/SSE transport (default `127.0.0.1:8000`). |
 | `MATRIX_MCP_PATH`    | URL path for the HTTP/SSE endpoint (default `/mcp`). |
@@ -140,26 +238,6 @@ The binary is written to `target/release/matrix-mcp`. `matrix-sdk` is built with
 rustls (no OpenSSL), end-to-end encryption, and a bundled SQLite store (compiled
 from source, so a C compiler is required for the build).
 
-## Use with an MCP client
-
-The server speaks MCP over stdio. Register it with your MCP client — for most
-clients, an entry in an MCP `servers` configuration:
-
-```json
-{
-  "mcpServers": {
-    "matrix": {
-      "command": "/path/to/target/release/matrix-mcp",
-      "env": {
-        "MATRIX_HOMESERVER": "https://matrix.org",
-        "MATRIX_USER": "alice",
-        "MATRIX_PASSWORD": "..."
-      }
-    }
-  }
-}
-```
-
 ## End-to-end encryption
 
 E2EE is enabled. The server encrypts outgoing messages in encrypted rooms and
@@ -174,8 +252,10 @@ A few practical notes:
   `sync` tool lets the device receive room keys (and `automatic-room-key-forwarding`
   requests missing ones); messages with no available key are returned with
   `unable_to_decrypt: true`.
-- This build does not perform interactive device verification or cross-signing,
-  so other users may see this device as unverified.
+- Interactive device verification (emoji/SAS, via cross-signing) is supported —
+  see [Verifying this device](#verifying-this-device-to-unlock-encrypted-history)
+  below. Until this device is verified, other users' clients may flag it as
+  unverified, and it can't be gossiped historical room keys.
 
 ### Reading messages sent before this device existed
 
@@ -275,7 +355,10 @@ without it the publish step is skipped cleanly.
 - Room history is fetched on demand rather than cached into a local timeline
   (`read_messages` supports paging further back via `before_token`/`next_token`,
   but there's no persistent local cache across calls).
-- No interactive device verification / cross-signing (see above).
+- Device verification is self-verification only (this device against your own
+  other, already cross-signed sessions). It requires the account to already
+  have a cross-signing identity — set one up in another client (e.g. Element)
+  first — and it can't verify other users' devices.
 - `send_file`/`download_media` read from and write to the local filesystem the
   server process runs on, not the MCP client's.
 
