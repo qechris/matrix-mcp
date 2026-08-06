@@ -28,14 +28,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Native Linux builds only (no cross-compilation of the C SQLite +
-        # rustls crypto stack). Each target == its host runner. arm64 uses the
-        # free public-repo `ubuntu-24.04-arm` hosted runner.
+        # Native builds only (no cross-compilation of the C SQLite + rustls
+        # crypto stack) — each target == its host runner. Linux arm64 uses the
+        # free public-repo `ubuntu-24.04-arm` hosted runner; macOS covers both
+        # Apple Silicon (macos-14) and Intel (macos-15-intel, since macos-13
+        # was retired).
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       # Resolve the tag BEFORE checkout so the workflow_dispatch path can check
@@ -224,16 +230,32 @@ jobs:
           done
           echo "All artifact checksums verified."
 
-      - name: Create GitHub release
+      # GitHub's immutable-releases feature locks a release's assets the
+      # moment it's published, so uploading files directly to a published
+      # release fails ("Cannot upload asset ... to an immutable release").
+      # Assets can still be attached to a draft, so: create as a draft with
+      # the assets attached, then flip it to published in a separate step
+      # that touches nothing else (no generate_release_notes here, or the
+      # notes would be regenerated and appended a second time).
+      - name: Create draft release with assets
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
-          draft: false
+          draft: true
           prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
           files: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          draft: false
+          prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

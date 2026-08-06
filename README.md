@@ -26,13 +26,14 @@ with this device verified for encrypted rooms.
 
 ### 1. Get the binary
 
-**Prebuilt (recommended):** download the archive for your architecture
-(`x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`) from the
+**Prebuilt (recommended):** download the archive for your platform
+(`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+`x86_64-apple-darwin`, or `aarch64-apple-darwin`) from the
 [latest release](https://github.com/qechris/matrix-mcp/releases/latest),
 along with its `.sha256` file, then verify and extract:
 
 ```sh
-sha256sum -c matrix-mcp-*.sha256
+sha256sum -c matrix-mcp-*.sha256    # macOS: shasum -a 256 -c matrix-mcp-*.sha256
 tar -xzf matrix-mcp-*.tar.gz
 ```
 
