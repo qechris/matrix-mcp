@@ -4,22 +4,19 @@ Builds [Desktop Extension](https://github.com/anthropics/mcpb) (`.mcpb`)
 bundles for one-click install in Claude Desktop, from the same release
 binaries `release.yml` already produces.
 
-Five files come out of a build: a "universal" bundle covering both macOS and
-Linux (arch-detected at launch via `bin/launch-*.sh`, since the `.mcpb`
-manifest format only dispatches per-OS, not per-architecture), plus four
-smaller single-platform/single-arch bundles for anyone who'd rather not
-download all four binaries at once.
+One `matrix-mcp-VERSION.mcpb` file comes out of a build, covering both macOS
+and Linux: `bin/launch-*.sh` picks the right architecture at launch, since
+the `.mcpb` manifest format only dispatches per-OS, not per-architecture.
 
 ## Layout
 
-- `manifest.base.json` — the parts of `manifest.json` shared by every
-  variant: metadata, `user_config` (homeserver/username/password, matching
-  the env vars documented in the main README), and the `tools` list.
-- `generate-manifest.mjs` — fills in the variant-specific parts (`name`,
-  `compatibility`, `server`) and writes a complete `manifest.json`.
-- `bin/launch-darwin.sh`, `bin/launch-linux.sh` — arch-detecting launchers
-  used only by the universal bundle.
-- `build.sh` — orchestrates the above into `.mcpb` files via the official
+- `manifest.base.json` — the parts of `manifest.json` that don't vary:
+  metadata, `user_config` (homeserver, matching the env vars documented in
+  the main README), and the `tools` list.
+- `generate-manifest.mjs` — fills in `name`, `compatibility`, and `server`
+  and writes a complete `manifest.json`.
+- `bin/launch-darwin.sh`, `bin/launch-linux.sh` — arch-detecting launchers.
+- `build.sh` — orchestrates the above into a `.mcpb` file via the official
   [`@anthropic-ai/mcpb`](https://www.npmjs.com/package/@anthropic-ai/mcpb)
   CLI (run through `npx`, no local install needed).
 
