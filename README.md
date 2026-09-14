@@ -26,8 +26,13 @@ with this device verified for encrypted rooms.
 
 ### 1. Get the binary
 
-**Prebuilt (recommended):** download the archive for your platform
-(`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+**Claude Desktop (easiest):** download a `.mcpb` file from the
+[latest release](https://github.com/qechris/matrix-mcp/releases/latest) and
+double-click it to install — this handles step 2 for you too. See
+[packaging/mcpb](packaging/mcpb) for which file to pick.
+
+**Prebuilt (recommended for everything else):** download the archive for
+your platform (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
 `x86_64-apple-darwin`, or `aarch64-apple-darwin`) from the
 [latest release](https://github.com/qechris/matrix-mcp/releases/latest),
 along with its `.sha256` file, then verify and extract:

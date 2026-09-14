@@ -1,0 +1,63 @@
+{
+  "manifest_version": "0.3",
+  "author": {
+    "name": "qechris",
+    "url": "https://github.com/qechris"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qechris/matrix-mcp.git"
+  },
+  "homepage": "https://github.com/qechris/matrix-mcp",
+  "documentation": "https://github.com/qechris/matrix-mcp#readme",
+  "support": "https://github.com/qechris/matrix-mcp/issues",
+  "license": "MIT",
+  "description": "Chat over Matrix: read and send messages, manage rooms, reply in threads, and more.",
+  "long_description": "matrix-mcp lets your assistant log in to a Matrix homeserver and drive most of what a full chat client can do: manage rooms and their membership, send and edit messages, react and reply, exchange files and images, look up profiles, hold direct-message conversations, and read/reply within threads. After installing, ask your assistant to run `login_sso` (or `login` for a username/password homeserver) to sign in, then `start_device_verification` to unlock reading encrypted history from before this device existed. End-to-end encryption is supported out of the box.",
+  "keywords": ["matrix", "chat", "messaging", "e2ee", "encryption"],
+  "user_config": {
+    "homeserver": {
+      "type": "string",
+      "title": "Homeserver URL",
+      "description": "Your Matrix homeserver, e.g. https://matrix.org",
+      "required": true,
+      "default": "https://matrix.org"
+    }
+  },
+  "tools": [
+    { "name": "login", "description": "Log in with username/password. The session is persisted and reused on the next start." },
+    { "name": "login_sso", "description": "Log in via the homeserver's SSO flow: opens a browser, waits for you to finish signing in." },
+    { "name": "login_with_token", "description": "Log in with a pre-obtained access token, for headless/automated setups on an SSO/OAuth homeserver." },
+    { "name": "logout", "description": "Log out, invalidate the access token, and clear the saved session." },
+    { "name": "whoami", "description": "Report the current login state (user id, device, homeserver, joined-room count, key-backup state)." },
+    { "name": "sync", "description": "Run a single sync to refresh the local room list and state, and flush pending key-backup uploads." },
+    { "name": "enable_key_backup", "description": "Set up a server-side key backup and return a new recovery key." },
+    { "name": "restore_key_backup", "description": "Unlock the key backup with a recovery key, making pre-existing messages readable." },
+    { "name": "download_room_keys", "description": "Force-fetch a room's historical keys from the key backup." },
+    { "name": "start_device_verification", "description": "Start interactive (emoji/SAS) verification of this device against another already-verified session." },
+    { "name": "continue_device_verification", "description": "Continue an in-progress device verification, fetching the emoji once accepted." },
+    { "name": "confirm_device_verification", "description": "Confirm the emoji match, completing device verification and cross-signing." },
+    { "name": "cancel_device_verification", "description": "Abort an in-progress device verification." },
+    { "name": "list_rooms", "description": "List joined rooms with id, name, topic, and encryption state." },
+    { "name": "send_message", "description": "Send a text message to a room, optionally as a rich reply." },
+    { "name": "edit_message", "description": "Edit a previously-sent message (sender only)." },
+    { "name": "redact_event", "description": "Redact (delete) a message, or a reaction to un-react." },
+    { "name": "send_reaction", "description": "React to a message with an emoji." },
+    { "name": "mark_read", "description": "Mark a room as read up to a given event, or the latest message." },
+    { "name": "read_messages", "description": "Read messages from a room, in chronological order, with pagination." },
+    { "name": "read_thread", "description": "Read one conversation thread: the root message plus its replies, oldest first." },
+    { "name": "get_room_members", "description": "List a room's members with display name, membership state, and power level." },
+    { "name": "join_room", "description": "Join a room by id or alias." },
+    { "name": "create_room", "description": "Create a room, optionally with a name, topic, invites, public visibility, encryption, or as a DM." },
+    { "name": "invite_user", "description": "Invite a user to a room." },
+    { "name": "leave_room", "description": "Leave a room." },
+    { "name": "kick_room_member", "description": "Kick a member from a room, optionally with a reason." },
+    { "name": "ban_room_member", "description": "Ban a member from a room, optionally with a reason." },
+    { "name": "unban_room_member", "description": "Unban a previously-banned member." },
+    { "name": "update_room", "description": "Update a room's name and/or topic." },
+    { "name": "create_dm", "description": "Get or create a direct-message room with a user." },
+    { "name": "get_profile", "description": "Look up a user's display name and avatar." },
+    { "name": "send_file", "description": "Upload a local file and send it as an image, audio, video, or generic attachment." },
+    { "name": "download_media", "description": "Download the media attached to a message event to a local path." }
+  ]
+}
