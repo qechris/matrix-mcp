@@ -104,8 +104,6 @@
   .cta-btn:hover { opacity: 0.92; }
   .cta-btn svg { width: 20px; height: 20px; }
   .cta-sub { color: var(--text-dim); font-size: 0.85rem; }
-  .cta-alt { color: var(--text-dim); font-size: 0.88rem; }
-  .cta-alt a { color: var(--text-dim); text-decoration: underline; }
 
   .gh-link {
     display: inline-flex;
@@ -133,7 +131,6 @@
 
   /* ---- body sections ---- */
   main { padding: 40px 0 72px; }
-  h2 { font-size: 1rem; margin: 0 0 4px; }
   .section-note { color: var(--text-dim); margin: 0 0 16px; font-size: 0.9rem; }
 
   details {
@@ -142,7 +139,6 @@
     padding: 16px 20px;
     margin-bottom: 12px;
   }
-  details + details { margin-top: 12px; }
   summary {
     cursor: pointer;
     font-weight: 600;
@@ -153,30 +149,6 @@
   summary::before { content: "▸ "; color: var(--text-dim); }
   details[open] summary::before { content: "▾ "; }
   details > *:not(summary) { margin-top: 14px; }
-
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 10px;
-  }
-  .card {
-    border: 1px solid var(--border);
-    background: var(--card-bg);
-    border-radius: 10px;
-    padding: 14px 16px;
-  }
-  .card .name { font-weight: 600; font-size: 0.92rem; }
-  .card .meta { color: var(--text-dim); font-size: 0.8rem; margin: 2px 0 10px; }
-  .card a.download {
-    display: inline-block;
-    font-size: 0.85rem;
-    padding: 6px 12px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    text-decoration: none;
-    color: var(--text);
-  }
-  .card a.download:hover { border-color: var(--accent); color: var(--accent); }
 
   code {
     background: var(--code-bg);
@@ -217,7 +189,7 @@
     <h1>matrix-mcp</h1>
     <p class="tagline">Chat over Matrix, right from Claude &mdash; read and send messages, manage rooms, reply in threads, and more.</p>
 
-    <div id="cta-status">Finding the right download for your device&hellip;</div>
+    <div id="cta-status">Loading the latest version&hellip;</div>
     <div id="error">
       Couldn't reach GitHub to look up the latest version (rate-limited, offline, or blocked).
       Get it directly instead:
@@ -229,7 +201,6 @@
         <span id="cta-button-text">Download</span>
       </a>
       <div class="cta-sub" id="cta-sub"></div>
-      <div class="cta-alt" id="cta-alt"></div>
     </div>
 
     <a class="gh-link" href="https://github.com/qechris/matrix-mcp" target="_blank" rel="noopener">
@@ -240,21 +211,6 @@
 </div>
 
 <main class="wrap">
-  <details id="mcpb-details">
-    <summary>Claude Desktop &mdash; other platforms / manual download</summary>
-    <p class="section-note">
-      Double-click a <code>.mcpb</code> file to install. The universal bundle
-      works everywhere (it detects your architecture at launch) but is a
-      bigger download; the others are a single binary each.
-    </p>
-    <p class="section-note" id="mcpb-empty" style="display:none">
-      No Claude Desktop download for the current release yet &mdash; check
-      back after the next release, or see the
-      <a href="https://github.com/qechris/matrix-mcp/releases/latest" target="_blank" rel="noopener">latest release</a> on GitHub.
-    </p>
-    <div class="grid" id="mcpb-grid"></div>
-  </details>
-
   <details id="advanced-details">
     <summary>Other ways to get it</summary>
     <ul class="other-list">
@@ -294,32 +250,15 @@
 
   var REPO = "qechris/matrix-mcp";
   var API_URL = "https://api.github.com/repos/" + REPO + "/releases/latest";
+  var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
 
-  var MCPB_VARIANTS = [
-    { id: "", label: "Universal (all platforms)", meta: "Detects your OS/arch at launch. Larger download.", os: null, arch: null },
-    { id: "-darwin-arm64", label: "macOS, Apple Silicon", meta: "M1/M2/M3/M4", os: "darwin", arch: "arm64" },
-    { id: "-darwin-x64", label: "macOS, Intel", meta: "x86_64", os: "darwin", arch: "x64" },
-    { id: "-linux-arm64", label: "Linux, ARM64", meta: "aarch64", os: "linux", arch: "arm64" },
-    { id: "-linux-x64", label: "Linux, x86_64", meta: "", os: "linux", arch: "x64" }
-  ];
-
-  function detectPlatform() {
+  function detectOS() {
     var ua = navigator.userAgent || "";
     var platform = navigator.platform || "";
-    var os = null;
-    if (/Mac/i.test(platform) || /Macintosh/i.test(ua)) os = "darwin";
-    else if (/Linux/i.test(platform) || /Linux/i.test(ua)) os = "linux";
-    else if (/Win/i.test(platform) || /Windows/i.test(ua)) os = "windows";
-
-    var arch = null;
-    if (os === "darwin") {
-      // There's no reliable client-side signal for Apple Silicon vs Intel;
-      // default to arm64 (current Macs) and let people pick Intel manually.
-      arch = "arm64";
-    } else if (os === "linux") {
-      arch = /aarch64|arm64/i.test(ua) ? "arm64" : "x64";
-    }
-    return { os: os, arch: arch };
+    if (/Mac/i.test(platform) || /Macintosh/i.test(ua)) return "darwin";
+    if (/Linux/i.test(platform) || /Linux/i.test(ua)) return "linux";
+    if (/Win/i.test(platform) || /Windows/i.test(ua)) return "windows";
+    return null;
   }
 
   function findAsset(assets, name) {
@@ -335,101 +274,39 @@
     return mb.toFixed(1) + " MB";
   }
 
-  function el(tag, attrs, children) {
-    var node = document.createElement(tag);
-    for (var k in attrs || {}) node.setAttribute(k, attrs[k]);
-    (children || []).forEach(function (c) {
-      node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-    });
-    return node;
-  }
-
   function render(release) {
     var version = release.tag_name.replace(/^v/, "");
     var assets = release.assets || [];
 
     document.getElementById("cta-status").style.display = "none";
 
-    // Hero CTA
-    var detected = detectPlatform();
+    var os = detectOS();
     var cta = document.getElementById("cta");
     var ctaButton = document.getElementById("cta-button");
     var ctaButtonText = document.getElementById("cta-button-text");
     var ctaSub = document.getElementById("cta-sub");
-    var ctaAlt = document.getElementById("cta-alt");
+    var mcpbAsset = findAsset(assets, "matrix-mcp-" + version + ".mcpb");
 
-    // Whether *any* .mcpb build exists for this release at all (it won't for
-    // a release cut before the package-mcpb CI job existed). If none do,
-    // routing the CTA/fallbacks at the (then-empty) Claude Desktop section
-    // would look broken, so point at prebuilt binaries instead.
-    var anyMcpb = MCPB_VARIANTS.some(function (v) {
-      return !!findAsset(assets, "matrix-mcp-" + version + v.id + ".mcpb");
-    });
-
-    function openMcpbDetails() { document.getElementById("mcpb-details").open = true; }
-
-    function showOtherOptionsLink(text) {
-      var link = el("a", { href: "#mcpb-details" }, [text]);
-      link.addEventListener("click", openMcpbDetails);
-      ctaAlt.appendChild(link);
+    function pointAtGitHub(sub) {
+      ctaButtonText.textContent = "See latest release on GitHub";
+      ctaButton.href = RELEASES_URL;
+      ctaButton.target = "_blank";
+      ctaButton.rel = "noopener";
+      ctaSub.textContent = sub;
     }
 
-    // No .mcpb build exists for this release at all (it won't for a release
-    // cut before the package-mcpb CI job existed). This page is Claude
-    // Desktop-only, so there is nothing here to fall back to: send people to
-    // GitHub rather than dead-ending on an empty section.
-    function fallbackToOtherDownloads(extraSub) {
-      if (anyMcpb) {
-        ctaButtonText.textContent = "See all downloads";
-        ctaButton.href = "#mcpb-details";
-        ctaButton.addEventListener("click", openMcpbDetails);
-        ctaSub.textContent = extraSub || "";
-      } else {
-        ctaButtonText.textContent = "See latest release on GitHub";
-        ctaButton.href = "https://github.com/" + REPO + "/releases/latest";
-        ctaButton.target = "_blank";
-        ctaButton.rel = "noopener";
-        ctaSub.textContent = (extraSub ? extraSub + " " : "") + "No Claude Desktop download for this release yet.";
-      }
-    }
-
-    if (detected.os === "windows") {
-      fallbackToOtherDownloads("Windows isn't packaged yet.");
-      cta.style.display = "flex";
-    } else if (detected.os) {
-      var variant = MCPB_VARIANTS.filter(function (v) { return v.os === detected.os && v.arch === detected.arch; })[0];
-      var assetName = "matrix-mcp-" + version + variant.id + ".mcpb";
-      var asset = findAsset(assets, assetName);
-      if (asset) {
-        ctaButtonText.textContent = "Download for " + variant.label;
-        ctaButton.href = asset.browser_download_url;
-        ctaSub.textContent = "Claude Desktop extension · " + formatSize(asset.size);
-        showOtherOptionsLink("Not your platform? See all downloads");
-      } else {
-        fallbackToOtherDownloads();
-      }
-      cta.style.display = "flex";
+    if (os === "windows") {
+      pointAtGitHub("Windows isn't packaged yet.");
+    } else if (mcpbAsset) {
+      ctaButtonText.textContent = "Download for Claude Desktop";
+      ctaButton.href = mcpbAsset.browser_download_url;
+      ctaButton.removeAttribute("target");
+      ctaButton.removeAttribute("rel");
+      ctaSub.textContent = "macOS & Linux · " + formatSize(mcpbAsset.size);
     } else {
-      fallbackToOtherDownloads();
-      cta.style.display = "flex";
+      pointAtGitHub("No Claude Desktop download for this release yet.");
     }
-
-    // mcpb grid (inside the "other platforms" disclosure)
-    var grid = document.getElementById("mcpb-grid");
-    MCPB_VARIANTS.forEach(function (v) {
-      var assetName = "matrix-mcp-" + version + v.id + ".mcpb";
-      var asset = findAsset(assets, assetName);
-      if (!asset) return;
-      var card = el("div", { class: "card" }, [
-        el("div", { class: "name" }, [v.label]),
-        el("div", { class: "meta" }, [v.meta ? v.meta + " · " + formatSize(asset.size) : formatSize(asset.size)]),
-        el("a", { class: "download", href: asset.browser_download_url }, ["Download"])
-      ]);
-      grid.appendChild(card);
-    });
-    if (!anyMcpb) {
-      document.getElementById("mcpb-empty").style.display = "";
-    }
+    cta.style.display = "flex";
   }
 
   fetch(API_URL, { headers: { Accept: "application/vnd.github+json" } })
