@@ -94,7 +94,10 @@ pub struct SendMessageArgs {
     pub body: String,
     #[schemars(description = "Render the body as Markdown (default false = plain text).")]
     pub markdown: Option<bool>,
-    #[schemars(description = "Event id to send this message as a rich reply to.")]
+    #[schemars(
+        description = "Event id to send this message as a rich reply to. Replying to a message \
+        that is part of a thread sends the reply into that thread."
+    )]
     pub reply_to_event_id: Option<String>,
 }
 
@@ -158,6 +161,24 @@ pub struct ReadMessagesArgs {
         description = "Continuation token from a previous call's next_token, to page further back in history."
     )]
     pub before_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReadThreadArgs {
+    #[schemars(description = "Room id containing the thread, e.g. !abc123:matrix.org.")]
+    pub room_id: String,
+    #[schemars(
+        description = "Event id of the thread root, or of any threaded reply in it (the \
+        thread_root field on a message from read_messages)."
+    )]
+    pub event_id: String,
+    #[schemars(description = "Maximum number of replies to return (default 50).")]
+    pub limit: Option<u32>,
+    #[schemars(
+        description = "Continuation token from a previous call's next_token, to page further \
+        through a long thread. Pass the thread_root event id alongside it."
+    )]
+    pub from_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -496,13 +517,15 @@ impl MatrixServer {
 
     #[tool(
         description = "Send a text message to a room. Set markdown=true to format the body as \
-        Markdown. Set reply_to_event_id to send as a rich reply to an existing message."
+        Markdown. Set reply_to_event_id to send as a rich reply to an existing message; if that \
+        message is part of a thread, the reply is sent into that thread, and the response's \
+        thread_root says which one."
     )]
     async fn send_message(
         &self,
         Parameters(args): Parameters<SendMessageArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let event_id = self
+        let (event_id, thread_root) = self
             .matrix
             .send_message(
                 &args.room_id,
@@ -516,6 +539,7 @@ impl MatrixServer {
             "sent": true,
             "room_id": args.room_id,
             "event_id": event_id,
+            "thread_root": thread_root,
         }))
     }
 
@@ -630,6 +654,32 @@ impl MatrixServer {
             .await
             .map_err(err)?;
         json_result(messages)
+    }
+
+    #[tool(
+        description = "Read a single conversation thread: the thread root message followed by \
+        its replies, oldest first. Threaded replies are interleaved with everything else in \
+        read_messages output, so use this to read one thread as a conversation. Accepts the \
+        root's event id or that of any reply in the thread. Pass the response's next_token as \
+        from_token to page through a long thread. Rich replies (send_message's \
+        reply_to_event_id) are not threads - read those with read_messages."
+    )]
+    async fn read_thread(
+        &self,
+        Parameters(args): Parameters<ReadThreadArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let limit = args.limit.unwrap_or(50).clamp(1, 100);
+        let thread = self
+            .matrix
+            .read_thread(
+                &args.room_id,
+                &args.event_id,
+                limit,
+                args.from_token.as_deref(),
+            )
+            .await
+            .map_err(err)?;
+        json_result(thread)
     }
 
     #[tool(description = "Join a room by its id (!room:server) or alias (#room:server).")]

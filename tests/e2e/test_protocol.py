@@ -12,6 +12,7 @@ EXPECTED_TOOLS = {
     "list_rooms",
     "send_message",
     "read_messages",
+    "read_thread",
     "join_room",
     "logout",
     "edit_message",

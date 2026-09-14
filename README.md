@@ -88,6 +88,7 @@ these to tool calls:
 - "List my rooms" → `list_rooms`
 - "Send 'hello' to #general:matrix.org" → `send_message`
 - "What's been said in that room recently?" → `read_messages`
+- "Catch me up on that thread" → `read_thread`
 - "React to that with a thumbs up" → `send_reaction`
 - "Start a DM with @bob:matrix.org" → `create_dm`
 
@@ -142,12 +143,13 @@ without needing another session online — see
 | `confirm_device_verification` | Confirm the emoji match, completing device verification and cross-signing. |
 | `cancel_device_verification` | Abort an in-progress device verification. |
 | `list_rooms`    | List joined rooms with id, name, topic, and encryption state. |
-| `send_message`  | Send a text message to a room (plain text or Markdown), optionally as a rich reply. |
+| `send_message`  | Send a text message to a room (plain text or Markdown), optionally as a rich reply — replies to a message in a thread stay in that thread. |
 | `edit_message`  | Edit a previously-sent message (sender only). |
 | `redact_event`  | Redact (delete) a message, or a reaction to un-react. |
 | `send_reaction` | React to a message with an emoji. |
 | `mark_read`     | Mark a room as read up to a given event, or the latest message. |
 | `read_messages` | Read messages from a room, in chronological order, with pagination via `before_token`/`next_token`. |
+| `read_thread`   | Read one conversation thread — the root message plus its replies, oldest first — from the root's event id or any reply in it. |
 | `get_room_members` | List a room's members with display name, membership state, and power level. |
 | `join_room`     | Join a room by id (`!room:server`) or alias (`#room:server`). |
 | `create_room`   | Create a room, optionally with a name, topic, invites, public visibility, encryption, or as a DM. |
@@ -371,6 +373,10 @@ without it the publish step is skipped cleanly.
   other, already cross-signed sessions). It requires the account to already
   have a cross-signing identity — set one up in another client (e.g. Element)
   first — and it can't verify other users' devices.
+- Threads can be read (`read_thread`) and replied into — replying to a message
+  that's already in a thread keeps the reply in that thread — but not *started*:
+  replying to a thread's root, or to any other unthreaded message, sends an
+  ordinary rich reply in the room timeline.
 - `send_file`/`download_media` read from and write to the local filesystem the
   server process runs on, not the MCP client's.
 
