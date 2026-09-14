@@ -168,9 +168,86 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  package-mcpb:
+    name: package desktop extension (.mcpb)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="${GITHUB_REF_NAME:-}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not determine release tag."
+            exit 1
+          fi
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Refusing to package untrusted/invalid tag '$TAG'. Expected vMAJOR.MINOR.PATCH[-suffix]."
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          {
+            echo "tag=${TAG}"
+            echo "version=${VERSION}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Extract per-platform binaries
+        shell: bash
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          extract() {
+            tar -xzf "dist/matrix-mcp-${VERSION}-${1}.tar.gz" -O ./matrix-mcp > "bin/matrix-mcp-${2}"
+            chmod +x "bin/matrix-mcp-${2}"
+          }
+          extract aarch64-apple-darwin      darwin-arm64
+          extract x86_64-apple-darwin       darwin-x64
+          extract aarch64-unknown-linux-gnu linux-arm64
+          extract x86_64-unknown-linux-gnu  linux-x64
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Build .mcpb bundles
+        shell: bash
+        run: packaging/mcpb/build.sh "${{ steps.tag.outputs.version }}" bin dist-mcpb
+
+      - name: Upload .mcpb artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcpb-bundles
+          path: dist-mcpb/*.mcpb
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: publish github release
-    needs: build
+    needs: [build, package-mcpb]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -247,6 +324,7 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
+            dist/*.mcpb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
