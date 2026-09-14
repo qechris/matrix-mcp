@@ -178,9 +178,6 @@
   }
   .card a.download:hover { border-color: var(--accent); color: var(--accent); }
 
-  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
-  th { color: var(--text-dim); font-weight: 500; }
   code {
     background: var(--code-bg);
     border-radius: 4px;
@@ -251,40 +248,32 @@
       bigger download; the others are a single binary each.
     </p>
     <p class="section-note" id="mcpb-empty" style="display:none">
-      No Claude Desktop download for the current release yet &mdash; see
-      prebuilt binaries below, or check back after the next release.
+      No Claude Desktop download for the current release yet &mdash; check
+      back after the next release, or see the
+      <a href="https://github.com/qechris/matrix-mcp/releases/latest" target="_blank" rel="noopener">latest release</a> on GitHub.
     </p>
     <div class="grid" id="mcpb-grid"></div>
   </details>
 
   <details id="advanced-details">
-    <summary>Advanced: other MCP clients, Docker, source</summary>
-    <div>
-      <h2>Prebuilt binaries</h2>
-      <p class="section-note">
-        For any other MCP client. Verify against the <code>.sha256</code> file, then extract:
-        <code>tar -xzf matrix-mcp-*.tar.gz</code>
-      </p>
-      <table>
-        <thead><tr><th>Platform</th><th>Download</th><th>Checksum</th></tr></thead>
-        <tbody id="tarball-rows"></tbody>
-      </table>
-    </div>
-    <div>
-      <h2>Other ways to get it</h2>
-      <ul class="other-list">
-        <li>
-          <div class="name">Container image</div>
-          <div class="meta"><code>docker pull ghcr.io/qechris/matrix-mcp</code> —
-            see <a href="https://github.com/qechris/matrix-mcp#container-image" target="_blank" rel="noopener">Container image</a></div>
-        </li>
-        <li>
-          <div class="name">Build from source</div>
-          <div class="meta"><code>cargo build --release</code> —
-            see <a href="https://github.com/qechris/matrix-mcp#build" target="_blank" rel="noopener">Build</a></div>
-        </li>
-      </ul>
-    </div>
+    <summary>Other ways to get it</summary>
+    <ul class="other-list">
+      <li>
+        <div class="name">Container image</div>
+        <div class="meta"><code>docker pull ghcr.io/qechris/matrix-mcp</code> —
+          see <a href="https://github.com/qechris/matrix-mcp#container-image" target="_blank" rel="noopener">Container image</a></div>
+      </li>
+      <li>
+        <div class="name">Build from source</div>
+        <div class="meta"><code>cargo build --release</code> —
+          see <a href="https://github.com/qechris/matrix-mcp#build" target="_blank" rel="noopener">Build</a></div>
+      </li>
+    </ul>
+    <p class="section-note">
+      Using a different MCP client, or want a raw platform binary? See the
+      <a href="https://github.com/qechris/matrix-mcp#readme" target="_blank" rel="noopener">README</a>
+      or <a href="https://github.com/qechris/matrix-mcp/releases/latest" target="_blank" rel="noopener">all releases</a> on GitHub.
+    </p>
   </details>
 </main>
 
@@ -312,13 +301,6 @@
     { id: "-darwin-x64", label: "macOS, Intel", meta: "x86_64", os: "darwin", arch: "x64" },
     { id: "-linux-arm64", label: "Linux, ARM64", meta: "aarch64", os: "linux", arch: "arm64" },
     { id: "-linux-x64", label: "Linux, x86_64", meta: "", os: "linux", arch: "x64" }
-  ];
-
-  var TARBALL_TARGETS = [
-    { target: "x86_64-unknown-linux-gnu", label: "Linux, x86_64" },
-    { target: "aarch64-unknown-linux-gnu", label: "Linux, ARM64" },
-    { target: "x86_64-apple-darwin", label: "macOS, Intel" },
-    { target: "aarch64-apple-darwin", label: "macOS, Apple Silicon" }
   ];
 
   function detectPlatform() {
@@ -385,7 +367,6 @@
     });
 
     function openMcpbDetails() { document.getElementById("mcpb-details").open = true; }
-    function openAdvancedDetails() { document.getElementById("advanced-details").open = true; }
 
     function showOtherOptionsLink(text) {
       var link = el("a", { href: "#mcpb-details" }, [text]);
@@ -393,6 +374,10 @@
       ctaAlt.appendChild(link);
     }
 
+    // No .mcpb build exists for this release at all (it won't for a release
+    // cut before the package-mcpb CI job existed). This page is Claude
+    // Desktop-only, so there is nothing here to fall back to: send people to
+    // GitHub rather than dead-ending on an empty section.
     function fallbackToOtherDownloads(extraSub) {
       if (anyMcpb) {
         ctaButtonText.textContent = "See all downloads";
@@ -400,10 +385,11 @@
         ctaButton.addEventListener("click", openMcpbDetails);
         ctaSub.textContent = extraSub || "";
       } else {
-        ctaButtonText.textContent = "See prebuilt binaries";
-        ctaButton.href = "#advanced-details";
-        ctaButton.addEventListener("click", openAdvancedDetails);
-        ctaSub.textContent = (extraSub ? extraSub + " " : "") + "No Claude Desktop build for this release yet.";
+        ctaButtonText.textContent = "See latest release on GitHub";
+        ctaButton.href = "https://github.com/" + REPO + "/releases/latest";
+        ctaButton.target = "_blank";
+        ctaButton.rel = "noopener";
+        ctaSub.textContent = (extraSub ? extraSub + " " : "") + "No Claude Desktop download for this release yet.";
       }
     }
 
@@ -444,21 +430,6 @@
     if (!anyMcpb) {
       document.getElementById("mcpb-empty").style.display = "";
     }
-
-    // tarball table
-    var rows = document.getElementById("tarball-rows");
-    TARBALL_TARGETS.forEach(function (t) {
-      var archiveName = "matrix-mcp-" + version + "-" + t.target + ".tar.gz";
-      var asset = findAsset(assets, archiveName);
-      if (!asset) return;
-      var sumAsset = findAsset(assets, archiveName + ".sha256");
-      var tr = el("tr", {}, [
-        el("td", {}, [t.label]),
-        el("td", {}, [el("a", { href: asset.browser_download_url }, [formatSize(asset.size)])]),
-        el("td", {}, [sumAsset ? el("a", { href: sumAsset.browser_download_url }, [".sha256"]) : ""])
-      ]);
-      rows.appendChild(tr);
-    });
   }
 
   fetch(API_URL, { headers: { Accept: "application/vnd.github+json" } })
