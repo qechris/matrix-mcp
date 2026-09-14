@@ -11,6 +11,7 @@ use matrix_sdk::{
     attachment::AttachmentConfig,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
+    deserialized_responses::TimelineEvent,
     encryption::{
         backups::BackupState,
         verification::{SasState, SasVerification, VerificationRequest, VerificationRequestState},
@@ -19,23 +20,27 @@ use matrix_sdk::{
     room::{
         edit::EditedContent,
         reply::{EnforceThread, Reply},
-        MessagesOptions,
+        IncludeRelations, MessagesOptions, RelationsOptions,
     },
     ruma::{
-        api::client::{
-            profile::{AvatarUrl, DisplayName},
-            receipt::create_receipt::v3::ReceiptType,
-            room::{create_room, Visibility},
+        api::{
+            client::{
+                profile::{AvatarUrl, DisplayName},
+                receipt::create_receipt::v3::ReceiptType,
+                room::{create_room, Visibility},
+            },
+            Direction,
         },
         assign,
         events::{
             reaction::ReactionEventContent,
             receipt::ReceiptThread,
-            relation::Annotation,
+            relation::{Annotation, RelationType},
             room::{
                 encryption::RoomEncryptionEventContent,
                 message::{
-                    MessageType, RoomMessageEventContentWithoutRelation, TextMessageEventContent,
+                    MessageType, Relation, RoomMessageEventContentWithoutRelation,
+                    TextMessageEventContent,
                 },
             },
             AnySyncMessageLikeEvent, AnySyncTimelineEvent, InitialStateEvent, SyncMessageLikeEvent,
@@ -960,7 +965,7 @@ impl MatrixManager {
         body: &str,
         markdown: bool,
         reply_to_event_id: Option<&str>,
-    ) -> Result<String> {
+    ) -> Result<(String, Option<String>)> {
         let client = self.connected_client().await?;
         let room = Self::resolve_room(&client, room_id)?;
 
@@ -976,7 +981,12 @@ impl MatrixManager {
                     without_relation,
                     Reply {
                         event_id: target,
-                        enforce_thread: EnforceThread::Unthreaded,
+                        // Forward the target's thread, if it has one: a reply
+                        // to a message inside a thread belongs in that thread,
+                        // not loose in the room timeline. Replying to anything
+                        // unthreaded - including a thread's own root - stays a
+                        // plain rich reply, so this never starts a new thread.
+                        enforce_thread: EnforceThread::MaybeThreaded,
                     },
                 )
                 .await
@@ -984,8 +994,14 @@ impl MatrixManager {
             }
             None => without_relation.with_relation(None),
         };
+        // Whether the thread was forwarded is only knowable from the built
+        // content, so report it rather than making callers re-read the event.
+        let thread_root = match &content.relates_to {
+            Some(Relation::Thread(thread)) => Some(thread.event_id.to_string()),
+            _ => None,
+        };
         let response = room.send(content).await.context("failed to send message")?;
-        Ok(response.event_id.to_string())
+        Ok((response.event_id.to_string(), thread_root))
     }
 
     /// Edit a previously-sent message (`m.replace`). Only the original sender
@@ -1437,59 +1453,18 @@ impl MatrixManager {
             .await
             .context("failed to fetch messages")?;
 
-        // Messages sent before this device existed are encrypted with keys it
-        // never received. Those keys live in the server-side key backup, so if
-        // the backup is unlocked, pull them and decode the same page again.
-        // `messages()` decrypts on every call against the current key store and
-        // caches nothing, so the second pass sees the freshly imported keys.
         let mut recovered_from_backup = false;
-        let needs_recovery = response.chunk.iter().any(Self::is_undecryptable)
-            && client.encryption().backups().state() == BackupState::Enabled;
-        if needs_recovery {
-            let downloaded = client
-                .encryption()
-                .backups()
-                .download_room_keys_for_room(room.room_id())
-                .await
-                .is_ok();
-            if downloaded {
-                if let Ok(retried) = room.messages(build_options()).await {
-                    recovered_from_backup = true;
-                    response = retried;
-                }
+        if Self::recover_room_keys(&client, &room, &response.chunk).await {
+            if let Ok(retried) = room.messages(build_options()).await {
+                recovered_from_backup = true;
+                response = retried;
             }
         }
 
-        let mut messages = Vec::new();
-        let mut undecryptable = 0usize;
-        for event in &response.chunk {
-            // With e2e-encryption enabled, `messages()` decrypts events in
-            // place, so `raw()` already yields plaintext for events we have
-            // keys for.
-            let value: Value = match serde_json::from_str(event.raw().json().get()) {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-            let event_type = value.get("type").and_then(Value::as_str);
-            // Reuse the parsed `value` rather than re-parsing via
-            // `is_undecryptable`: an event left as raw `m.room.encrypted` (or
-            // flagged by the SDK) is one we couldn't decrypt.
-            let unable_to_decrypt = event.kind.is_utd() || event_type == Some("m.room.encrypted");
-            if unable_to_decrypt {
-                undecryptable += 1;
-            }
-            messages.push(json!({
-                "type": event_type,
-                "sender": value.get("sender").and_then(Value::as_str),
-                "event_id": value.get("event_id").and_then(Value::as_str),
-                "origin_server_ts": value.get("origin_server_ts").cloned().unwrap_or(Value::Null),
-                "msgtype": value.pointer("/content/msgtype").and_then(Value::as_str),
-                "body": value.pointer("/content/body").and_then(Value::as_str),
-                "unable_to_decrypt": unable_to_decrypt,
-            }));
-        }
+        let mut messages = Self::format_events(&response.chunk);
         // `backward` yields newest-first; reverse for chronological reading.
         messages.reverse();
+        let undecryptable = Self::count_undecryptable(&messages);
         Ok(json!({
             "room_id": room_id,
             "count": messages.len(),
@@ -1497,17 +1472,198 @@ impl MatrixManager {
             "next_token": response.end,
             "undecryptable_count": undecryptable,
             "recovered_keys_from_backup": recovered_from_backup,
-            "hint": (undecryptable > 0).then_some(
-                "Some messages could not be decrypted. If they predate this device, unlock the \
-                 server-side key backup with `restore_key_backup` (needs your recovery key).",
-            ),
+            "hint": Self::decryption_hint(undecryptable),
         }))
+    }
+
+    /// Read a single thread: the root message followed by its replies, oldest
+    /// first. Threaded replies are ordinary events carrying an `m.thread`
+    /// relation to the root, so this is the relations API rather than the room
+    /// timeline - thread replies do not appear in `read_messages` output in
+    /// their conversational order.
+    pub async fn read_thread(
+        &self,
+        room_id: &str,
+        event_id: &str,
+        limit: u32,
+        from_token: Option<&str>,
+    ) -> Result<Value> {
+        let client = self.connected_client().await?;
+        let room = Self::resolve_room(&client, room_id)?;
+        let requested = Self::parse_event_id(event_id)?;
+
+        // The root only belongs on the first page; later pages continue from a
+        // token and would otherwise repeat it. Fetching it also lets us accept
+        // the id of any message *inside* the thread: callers reading
+        // `read_messages` output see replies, not the root, so redirect to the
+        // root they relate to instead of returning a confusingly empty thread.
+        let (root_id, root_event) = match from_token {
+            Some(_) => (requested, None),
+            None => {
+                let event = room.event(&requested, None).await.with_context(|| {
+                    format!("failed to fetch event {requested} - is it a message in this room?")
+                })?;
+                match Self::thread_root_of(&event) {
+                    Some(root_id) => {
+                        let root = room
+                            .event(&root_id, None)
+                            .await
+                            .with_context(|| format!("failed to fetch thread root {root_id}"))?;
+                        (root_id, Some(root))
+                    }
+                    None => (requested, Some(event)),
+                }
+            }
+        };
+
+        let build_options = || RelationsOptions {
+            from: from_token.map(str::to_owned),
+            // Forward from the root reads the thread in conversation order,
+            // and pages onward through it via `next_batch_token`.
+            dir: Direction::Forward,
+            limit: Some(limit.into()),
+            include_relations: IncludeRelations::RelationsOfType(RelationType::Thread),
+            recurse: false,
+        };
+
+        let mut response = room
+            .relations(root_id.clone(), build_options())
+            .await
+            .context("failed to fetch thread replies")?;
+
+        let mut recovered_from_backup = false;
+        if Self::recover_room_keys(&client, &room, &response.chunk).await {
+            if let Ok(retried) = room.relations(root_id.clone(), build_options()).await {
+                recovered_from_backup = true;
+                response = retried;
+            }
+        }
+
+        let mut root_message = root_event.as_ref().and_then(Self::format_event);
+        // The root was fetched before any keys were imported, so if the replies
+        // triggered a recovery, decode it again against the fresh keys.
+        if recovered_from_backup
+            && root_message
+                .as_ref()
+                .is_some_and(|m| m["unable_to_decrypt"] == Value::Bool(true))
+        {
+            if let Ok(root) = room.event(&root_id, None).await {
+                root_message = Self::format_event(&root).or(root_message);
+            }
+        }
+
+        let reply_count = response.chunk.len();
+        let messages: Vec<Value> = root_message
+            .into_iter()
+            .chain(Self::format_events(&response.chunk))
+            .collect();
+        let undecryptable = Self::count_undecryptable(&messages);
+
+        Ok(json!({
+            "room_id": room_id,
+            "thread_root": root_id.to_string(),
+            "count": messages.len(),
+            "reply_count": reply_count,
+            "messages": messages,
+            "next_token": response.next_batch_token,
+            "undecryptable_count": undecryptable,
+            "recovered_keys_from_backup": recovered_from_backup,
+            "hint": Self::decryption_hint(undecryptable).or_else(|| {
+                (reply_count == 0 && from_token.is_none()).then_some(
+                    "This message has no threaded replies. Replies made with `send_message`'s \
+                     reply_to_event_id are rich replies, not threads, and stay in the room \
+                     timeline - read those with `read_messages`.",
+                )
+            }),
+        }))
+    }
+
+    /// Render a batch of timeline events into the message shape both read
+    /// tools return, skipping any whose raw JSON won't parse.
+    fn format_events(chunk: &[TimelineEvent]) -> Vec<Value> {
+        chunk.iter().filter_map(Self::format_event).collect()
+    }
+
+    /// Render one timeline event as a message object.
+    fn format_event(event: &TimelineEvent) -> Option<Value> {
+        // With e2e-encryption enabled, the SDK decrypts events in place, so
+        // `raw()` already yields plaintext for events we have keys for.
+        let value: Value = serde_json::from_str(event.raw().json().get()).ok()?;
+        let event_type = value.get("type").and_then(Value::as_str);
+        // Reuse the parsed `value` rather than re-parsing via
+        // `is_undecryptable`: an event left as raw `m.room.encrypted` (or
+        // flagged by the SDK) is one we couldn't decrypt.
+        let unable_to_decrypt = event.kind.is_utd() || event_type == Some("m.room.encrypted");
+        Some(json!({
+            "type": event_type,
+            "sender": value.get("sender").and_then(Value::as_str),
+            "event_id": value.get("event_id").and_then(Value::as_str),
+            "origin_server_ts": value.get("origin_server_ts").cloned().unwrap_or(Value::Null),
+            "msgtype": value.pointer("/content/msgtype").and_then(Value::as_str),
+            "body": value.pointer("/content/body").and_then(Value::as_str),
+            "unable_to_decrypt": unable_to_decrypt,
+            // Non-null on a threaded reply, naming the thread it belongs to -
+            // the id to pass to `read_thread`.
+            "thread_root": Self::thread_root_in(&value).map(|id| id.to_string()),
+        }))
+    }
+
+    fn count_undecryptable(messages: &[Value]) -> usize {
+        messages
+            .iter()
+            .filter(|m| m["unable_to_decrypt"] == Value::Bool(true))
+            .count()
+    }
+
+    fn decryption_hint(undecryptable: usize) -> Option<&'static str> {
+        (undecryptable > 0).then_some(
+            "Some messages could not be decrypted. If they predate this device, unlock the \
+             server-side key backup with `restore_key_backup` (needs your recovery key).",
+        )
+    }
+
+    /// The thread this event is a reply in, or `None` if it isn't a threaded
+    /// reply. A thread relation is sent unencrypted so servers can bundle it,
+    /// so this reads correctly even for events we couldn't decrypt.
+    fn thread_root_of(event: &TimelineEvent) -> Option<OwnedEventId> {
+        Self::thread_root_in(&serde_json::from_str(event.raw().json().get()).ok()?)
+    }
+
+    /// `thread_root_of` against already-parsed event JSON.
+    fn thread_root_in(value: &Value) -> Option<OwnedEventId> {
+        let relation = value.pointer("/content/m.relates_to")?;
+        if relation.get("rel_type").and_then(Value::as_str) != Some("m.thread") {
+            return None;
+        }
+        EventId::parse(relation.get("event_id")?.as_str()?).ok()
+    }
+
+    /// If any event in `chunk` couldn't be decrypted, and the server-side key
+    /// backup is unlocked, import this room's keys from it. Messages sent
+    /// before this device existed are encrypted with keys it never received,
+    /// and those keys live in the backup.
+    ///
+    /// Returns whether keys were imported, in which case re-requesting the same
+    /// page decodes it again against them - the read APIs decrypt on every call
+    /// and cache nothing, so the second pass sees the fresh keys.
+    async fn recover_room_keys(client: &Client, room: &Room, chunk: &[TimelineEvent]) -> bool {
+        if !chunk.iter().any(Self::is_undecryptable)
+            || client.encryption().backups().state() != BackupState::Enabled
+        {
+            return false;
+        }
+        client
+            .encryption()
+            .backups()
+            .download_room_keys_for_room(room.room_id())
+            .await
+            .is_ok()
     }
 
     /// Whether an event could not be decrypted. Prefers the SDK's own flag, but
     /// also catches events left as raw `m.room.encrypted` when decryption was
     /// never attempted (e.g. no crypto store), which the flag alone misses.
-    fn is_undecryptable(event: &matrix_sdk::deserialized_responses::TimelineEvent) -> bool {
+    fn is_undecryptable(event: &TimelineEvent) -> bool {
         event.kind.is_utd()
             || serde_json::from_str::<Value>(event.raw().json().get())
                 .ok()
