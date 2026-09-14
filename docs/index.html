@@ -250,10 +250,14 @@
       works everywhere (it detects your architecture at launch) but is a
       bigger download; the others are a single binary each.
     </p>
+    <p class="section-note" id="mcpb-empty" style="display:none">
+      No Claude Desktop download for the current release yet &mdash; see
+      prebuilt binaries below, or check back after the next release.
+    </p>
     <div class="grid" id="mcpb-grid"></div>
   </details>
 
-  <details>
+  <details id="advanced-details">
     <summary>Advanced: other MCP clients, Docker, source</summary>
     <div>
       <h2>Prebuilt binaries</h2>
@@ -372,19 +376,39 @@
     var ctaSub = document.getElementById("cta-sub");
     var ctaAlt = document.getElementById("cta-alt");
 
+    // Whether *any* .mcpb build exists for this release at all (it won't for
+    // a release cut before the package-mcpb CI job existed). If none do,
+    // routing the CTA/fallbacks at the (then-empty) Claude Desktop section
+    // would look broken, so point at prebuilt binaries instead.
+    var anyMcpb = MCPB_VARIANTS.some(function (v) {
+      return !!findAsset(assets, "matrix-mcp-" + version + v.id + ".mcpb");
+    });
+
+    function openMcpbDetails() { document.getElementById("mcpb-details").open = true; }
+    function openAdvancedDetails() { document.getElementById("advanced-details").open = true; }
+
     function showOtherOptionsLink(text) {
       var link = el("a", { href: "#mcpb-details" }, [text]);
-      link.addEventListener("click", function () {
-        document.getElementById("mcpb-details").open = true;
-      });
+      link.addEventListener("click", openMcpbDetails);
       ctaAlt.appendChild(link);
     }
 
+    function fallbackToOtherDownloads(extraSub) {
+      if (anyMcpb) {
+        ctaButtonText.textContent = "See all downloads";
+        ctaButton.href = "#mcpb-details";
+        ctaButton.addEventListener("click", openMcpbDetails);
+        ctaSub.textContent = extraSub || "";
+      } else {
+        ctaButtonText.textContent = "See prebuilt binaries";
+        ctaButton.href = "#advanced-details";
+        ctaButton.addEventListener("click", openAdvancedDetails);
+        ctaSub.textContent = (extraSub ? extraSub + " " : "") + "No Claude Desktop build for this release yet.";
+      }
+    }
+
     if (detected.os === "windows") {
-      ctaButtonText.textContent = "See downloads for macOS / Linux";
-      ctaButton.href = "#mcpb-details";
-      ctaButton.addEventListener("click", function () { document.getElementById("mcpb-details").open = true; });
-      ctaSub.textContent = "Windows isn't packaged yet.";
+      fallbackToOtherDownloads("Windows isn't packaged yet.");
       cta.style.display = "flex";
     } else if (detected.os) {
       var variant = MCPB_VARIANTS.filter(function (v) { return v.os === detected.os && v.arch === detected.arch; })[0];
@@ -395,17 +419,12 @@
         ctaButton.href = asset.browser_download_url;
         ctaSub.textContent = "Claude Desktop extension · " + formatSize(asset.size);
         showOtherOptionsLink("Not your platform? See all downloads");
-        cta.style.display = "flex";
       } else {
-        ctaButtonText.textContent = "See all downloads";
-        ctaButton.href = "#mcpb-details";
-        ctaButton.addEventListener("click", function () { document.getElementById("mcpb-details").open = true; });
-        cta.style.display = "flex";
+        fallbackToOtherDownloads();
       }
+      cta.style.display = "flex";
     } else {
-      ctaButtonText.textContent = "See all downloads";
-      ctaButton.href = "#mcpb-details";
-      ctaButton.addEventListener("click", function () { document.getElementById("mcpb-details").open = true; });
+      fallbackToOtherDownloads();
       cta.style.display = "flex";
     }
 
@@ -422,6 +441,9 @@
       ]);
       grid.appendChild(card);
     });
+    if (!anyMcpb) {
+      document.getElementById("mcpb-empty").style.display = "";
+    }
 
     // tarball table
     var rows = document.getElementById("tarball-rows");
