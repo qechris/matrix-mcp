@@ -39,7 +39,7 @@ use matrix_sdk::{
             room::{
                 encryption::RoomEncryptionEventContent,
                 message::{
-                    MessageType, Relation, RoomMessageEventContentWithoutRelation,
+                    AddMentions, MessageType, Relation, RoomMessageEventContentWithoutRelation,
                     TextMessageEventContent,
                 },
             },
@@ -987,6 +987,11 @@ impl MatrixManager {
                         // unthreaded - including a thread's own root - stays a
                         // plain rich reply, so this never starts a new thread.
                         enforce_thread: EnforceThread::MaybeThreaded,
+                        // Notify the author we are replying to, as the spec
+                        // expects. The SDK downgrades this to `No` by itself
+                        // when replying to our own message, since outgoing
+                        // messages cannot self-notify.
+                        add_mentions: AddMentions::Yes,
                     },
                 )
                 .await
@@ -1001,7 +1006,7 @@ impl MatrixManager {
             _ => None,
         };
         let response = room.send(content).await.context("failed to send message")?;
-        Ok((response.event_id.to_string(), thread_root))
+        Ok((response.response.event_id.to_string(), thread_root))
     }
 
     /// Edit a previously-sent message (`m.replace`). Only the original sender
@@ -1027,7 +1032,7 @@ impl MatrixManager {
             .await
             .context("failed to build edit")?;
         let response = room.send(edit).await.context("failed to send edit")?;
-        Ok(response.event_id.to_string())
+        Ok(response.response.event_id.to_string())
     }
 
     /// Redact (delete) an event - a message or a reaction - optionally with a
@@ -1068,7 +1073,7 @@ impl MatrixManager {
             .send(content)
             .await
             .context("failed to send reaction")?;
-        Ok(response.event_id.to_string())
+        Ok(response.response.event_id.to_string())
     }
 
     /// Mark a room as read up to `event_id` (or the latest message if not
@@ -1093,6 +1098,7 @@ impl MatrixManager {
                 latest
                     .event_id()
                     .ok_or_else(|| anyhow!("latest event has no id"))?
+                    .to_owned()
             }
         };
 
