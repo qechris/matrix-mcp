@@ -10,6 +10,10 @@
 //! * `http` / `sse`    - SSE-based streamable-HTTP transport served over a TCP
 //!   socket, for remote/networked clients.
 
+// The deeply-nested futures inside `matrix-sdk`'s send path push rustc's
+// layout computation past the default query depth limit.
+#![recursion_limit = "256"]
+
 mod matrix;
 mod server;
 
