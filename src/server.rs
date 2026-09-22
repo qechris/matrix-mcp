@@ -308,7 +308,8 @@ fn err(e: anyhow::Error) -> ErrorData {
 impl MatrixServer {
     #[tool(
         description = "Log in to a Matrix homeserver with a username and password. \
-        The session is saved to disk and reused on the next start."
+        The session is saved to disk and reused on the next start.",
+        annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn login(
         &self,
@@ -329,7 +330,12 @@ impl MatrixServer {
 
     #[tool(
         description = "Log in using a pre-obtained access token instead of a password. Use this \
-        for homeservers that require SSO/OAuth, which this server cannot complete interactively."
+        for homeservers that require SSO/OAuth, which this server cannot complete interactively.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     async fn login_with_token(
         &self,
@@ -357,7 +363,8 @@ impl MatrixServer {
         description = "Log in via the homeserver's SSO flow, for homeservers that require SSO/OAuth. \
         Opens a local callback listener, gets the SSO URL, opens it in the default browser \
         (best-effort - if that fails, open the returned sso_url manually), and waits up to 5 \
-        minutes for the browser flow to complete. This call blocks until you finish signing in."
+        minutes for the browser flow to complete. This call blocks until you finish signing in.",
+        annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn login_sso(
         &self,
@@ -381,7 +388,8 @@ impl MatrixServer {
     }
 
     #[tool(
-        description = "Report the current login state: user id, device, homeserver, and joined room count."
+        description = "Report the current login state: user id, device, homeserver, and joined room count.",
+        annotations(read_only_hint = true)
     )]
     async fn whoami(&self) -> Result<CallToolResult, ErrorData> {
         json_result(self.matrix.whoami().await)
@@ -389,7 +397,12 @@ impl MatrixServer {
 
     #[tool(
         description = "Log out of the current session, invalidating the access token and \
-        clearing the saved session so the next start requires logging in again."
+        clearing the saved session so the next start requires logging in again.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
     )]
     async fn logout(&self) -> Result<CallToolResult, ErrorData> {
         self.matrix.logout().await.map_err(err)?;
@@ -397,7 +410,12 @@ impl MatrixServer {
     }
 
     #[tool(
-        description = "Run a single sync against the homeserver to refresh the local room list and state."
+        description = "Run a single sync against the homeserver to refresh the local room list and state.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     async fn sync(&self) -> Result<CallToolResult, ErrorData> {
         self.matrix.sync().await.map_err(err)?;
@@ -407,7 +425,8 @@ impl MatrixServer {
     #[tool(
         description = "Set up a server-side key backup for this account and upload this device's \
         room keys, returning a newly generated recovery key. Use this when the account has no \
-        backup yet. The recovery key is shown once and cannot be recovered - save it."
+        backup yet. The recovery key is shown once and cannot be recovered - save it.",
+        annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn enable_key_backup(
         &self,
@@ -424,7 +443,12 @@ impl MatrixServer {
     #[tool(
         description = "Unlock the server-side key backup with a recovery key, so encrypted \
         messages sent before this device existed can be decrypted. Needed once per device; \
-        after this, reading a room automatically pulls its historical keys."
+        after this, reading a room automatically pulls its historical keys.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     async fn restore_key_backup(
         &self,
@@ -441,7 +465,12 @@ impl MatrixServer {
     #[tool(
         description = "Download a room's historical message keys from the server-side key backup. \
         Requires `restore_key_backup` to have been run first. `read_messages` does this \
-        automatically when it hits undecryptable messages, so this is mainly for forcing a refresh."
+        automatically when it hits undecryptable messages, so this is mainly for forcing a refresh.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     async fn download_room_keys(
         &self,
@@ -460,7 +489,8 @@ impl MatrixServer {
         (e.g. Element). Sends the verification request that session is waiting for and returns \
         emoji to compare. Once verified, this device is gossiped the keys to read history - no \
         recovery key needed. This call blocks until the emoji are ready; then compare them and \
-        call confirm_device_verification (or cancel_device_verification if they differ)."
+        call confirm_device_verification (or cancel_device_verification if they differ).",
+        annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn start_device_verification(&self) -> Result<CallToolResult, ErrorData> {
         let result = self.matrix.start_device_verification().await.map_err(err)?;
@@ -470,7 +500,12 @@ impl MatrixServer {
     #[tool(
         description = "Continue an in-progress device verification: after you've accepted the \
         request in your other session, this fetches the emoji to compare. Returns status \
-        \"pending\" if the other session hasn't accepted yet - just call it again."
+        \"pending\" if the other session hasn't accepted yet - just call it again.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     async fn continue_device_verification(&self) -> Result<CallToolResult, ErrorData> {
         let result = self
@@ -484,7 +519,12 @@ impl MatrixServer {
     #[tool(
         description = "Confirm the emoji from start_device_verification match your other session, \
         completing verification. Afterwards this device receives the cross-signing secrets and \
-        key-backup key automatically and can read encrypted history."
+        key-backup key automatically and can read encrypted history.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     async fn confirm_device_verification(&self) -> Result<CallToolResult, ErrorData> {
         let result = self
@@ -496,7 +536,12 @@ impl MatrixServer {
     }
 
     #[tool(
-        description = "Abort an in-progress device verification (e.g. the emoji did not match)."
+        description = "Abort an in-progress device verification (e.g. the emoji did not match).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     async fn cancel_device_verification(&self) -> Result<CallToolResult, ErrorData> {
         let result = self
@@ -508,7 +553,8 @@ impl MatrixServer {
     }
 
     #[tool(
-        description = "List the rooms the logged-in account has joined, with id, name, topic, and encryption state."
+        description = "List the rooms the logged-in account has joined, with id, name, topic, and encryption state.",
+        annotations(read_only_hint = true)
     )]
     async fn list_rooms(&self) -> Result<CallToolResult, ErrorData> {
         let rooms = self.matrix.list_rooms().await.map_err(err)?;
@@ -519,7 +565,8 @@ impl MatrixServer {
         description = "Send a text message to a room. Set markdown=true to format the body as \
         Markdown. Set reply_to_event_id to send as a rich reply to an existing message; if that \
         message is part of a thread, the reply is sent into that thread, and the response's \
-        thread_root says which one."
+        thread_root says which one.",
+        annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn send_message(
         &self,
@@ -543,7 +590,10 @@ impl MatrixServer {
         }))
     }
 
-    #[tool(description = "Edit a previously-sent message (only the original sender can edit it).")]
+    #[tool(
+        description = "Edit a previously-sent message (only the original sender can edit it).",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
     async fn edit_message(
         &self,
         Parameters(args): Parameters<EditMessageArgs>,
@@ -566,7 +616,12 @@ impl MatrixServer {
     }
 
     #[tool(
-        description = "Redact (delete) an event - a message, to remove it, or a reaction, to un-react."
+        description = "Redact (delete) an event - a message, to remove it, or a reaction, to un-react.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
     )]
     async fn redact_event(
         &self,
@@ -585,7 +640,10 @@ impl MatrixServer {
         }))
     }
 
-    #[tool(description = "React to a message with an emoji.")]
+    #[tool(
+        description = "React to a message with an emoji.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
     async fn send_reaction(
         &self,
         Parameters(args): Parameters<SendReactionArgs>,
@@ -603,7 +661,12 @@ impl MatrixServer {
     }
 
     #[tool(
-        description = "Mark a room as read up to a given event (or the latest message if omitted)."
+        description = "Mark a room as read up to a given event (or the latest message if omitted).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     async fn mark_read(
         &self,
@@ -622,7 +685,8 @@ impl MatrixServer {
     }
 
     #[tool(
-        description = "List the members of a room with their user id, display name, membership state, and power level."
+        description = "List the members of a room with their user id, display name, membership state, and power level.",
+        annotations(read_only_hint = true)
     )]
     async fn get_room_members(
         &self,
@@ -641,7 +705,8 @@ impl MatrixServer {
         starts from the most recent message; pass the response's next_token as before_token to \
         page further back in history (next_token is null once the start of the room is reached). \
         End-to-end encrypted messages are decrypted automatically when the keys are available; \
-        any that cannot be decrypted are flagged with unable_to_decrypt=true."
+        any that cannot be decrypted are flagged with unable_to_decrypt=true.",
+        annotations(read_only_hint = true)
     )]
     async fn read_messages(
         &self,
@@ -662,7 +727,8 @@ impl MatrixServer {
         read_messages output, so use this to read one thread as a conversation. Accepts the \
         root's event id or that of any reply in the thread. Pass the response's next_token as \
         from_token to page through a long thread. Rich replies (send_message's \
-        reply_to_event_id) are not threads - read those with read_messages."
+        reply_to_event_id) are not threads - read those with read_messages.",
+        annotations(read_only_hint = true)
     )]
     async fn read_thread(
         &self,
@@ -682,7 +748,14 @@ impl MatrixServer {
         json_result(thread)
     }
 
-    #[tool(description = "Join a room by its id (!room:server) or alias (#room:server).")]
+    #[tool(
+        description = "Join a room by its id (!room:server) or alias (#room:server).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
     async fn join_room(
         &self,
         Parameters(args): Parameters<JoinRoomArgs>,
@@ -693,7 +766,8 @@ impl MatrixServer {
 
     #[tool(
         description = "Create a new room, optionally with a name, topic, invited users, \
-        public visibility, encryption, or as a direct message."
+        public visibility, encryption, or as a direct message.",
+        annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn create_room(
         &self,
@@ -714,7 +788,14 @@ impl MatrixServer {
         json_result(serde_json::json!({ "created": true, "room_id": room_id }))
     }
 
-    #[tool(description = "Invite a user to a room.")]
+    #[tool(
+        description = "Invite a user to a room.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
     async fn invite_user(
         &self,
         Parameters(args): Parameters<InviteUserArgs>,
@@ -730,7 +811,14 @@ impl MatrixServer {
         }))
     }
 
-    #[tool(description = "Leave a room.")]
+    #[tool(
+        description = "Leave a room.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
+    )]
     async fn leave_room(
         &self,
         Parameters(args): Parameters<LeaveRoomArgs>,
@@ -739,7 +827,14 @@ impl MatrixServer {
         json_result(serde_json::json!({ "left": true, "room_id": args.room_id }))
     }
 
-    #[tool(description = "Kick a member from a room, optionally with a reason.")]
+    #[tool(
+        description = "Kick a member from a room, optionally with a reason.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
+    )]
     async fn kick_room_member(
         &self,
         Parameters(args): Parameters<RoomMemberActionArgs>,
@@ -755,7 +850,14 @@ impl MatrixServer {
         }))
     }
 
-    #[tool(description = "Ban a member from a room, optionally with a reason.")]
+    #[tool(
+        description = "Ban a member from a room, optionally with a reason.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
+    )]
     async fn ban_room_member(
         &self,
         Parameters(args): Parameters<RoomMemberActionArgs>,
@@ -771,7 +873,14 @@ impl MatrixServer {
         }))
     }
 
-    #[tool(description = "Unban a previously-banned member from a room, optionally with a reason.")]
+    #[tool(
+        description = "Unban a previously-banned member from a room, optionally with a reason.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
     async fn unban_room_member(
         &self,
         Parameters(args): Parameters<RoomMemberActionArgs>,
@@ -788,7 +897,12 @@ impl MatrixServer {
     }
 
     #[tool(
-        description = "Update a room's name and/or topic. Only the fields provided are changed."
+        description = "Update a room's name and/or topic. Only the fields provided are changed.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     async fn update_room(
         &self,
@@ -802,7 +916,12 @@ impl MatrixServer {
     }
 
     #[tool(
-        description = "Get or create a direct-message room with a user. Reuses an existing DM if one already exists."
+        description = "Get or create a direct-message room with a user. Reuses an existing DM if one already exists.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     async fn create_dm(
         &self,
@@ -813,7 +932,8 @@ impl MatrixServer {
     }
 
     #[tool(
-        description = "Look up a user's profile (display name and avatar). Defaults to the logged-in user."
+        description = "Look up a user's profile (display name and avatar). Defaults to the logged-in user.",
+        annotations(read_only_hint = true)
     )]
     async fn get_profile(
         &self,
@@ -829,7 +949,8 @@ impl MatrixServer {
 
     #[tool(
         description = "Upload a local file and send it to a room as an image, audio, video, \
-        or generic file attachment (chosen automatically from its MIME type)."
+        or generic file attachment (chosen automatically from its MIME type).",
+        annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn send_file(
         &self,
@@ -848,7 +969,12 @@ impl MatrixServer {
     }
 
     #[tool(
-        description = "Download the media attached to a message event and save it to a local path."
+        description = "Download the media attached to a message event and save it to a local path.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
     )]
     async fn download_media(
         &self,
