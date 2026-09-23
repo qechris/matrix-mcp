@@ -45,6 +45,20 @@ path in `matrix.rs` only checks `XDG_STATE_HOME`/`HOME`, neither of which is
 reliably set on Windows — that needs fixing first. Add a `win32` platform
 here once both are resolved.
 
+## Uninstalling
+
+Removing the extension in Claude Desktop does not remove the server's saved
+login and encryption store: they live outside the extension directory, in
+`$XDG_STATE_HOME/matrix-mcp/` (usually `~/.local/state/matrix-mcp/`), so
+that they survive extension updates. The `.mcpb` format has no uninstall
+hook to clean them up.
+
+To remove everything, run the `logout` tool before uninstalling (it logs
+the device out on the homeserver and deletes the local state), or delete
+that directory afterwards. Reinstalling without doing either is safe: the
+server discards state left by a device that no longer exists, and a fresh
+login replaces anything left over.
+
 ## Signing
 
 These bundles are unsigned. Claude Desktop may warn on install; see the
