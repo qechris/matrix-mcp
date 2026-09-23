@@ -28,7 +28,7 @@
     { "name": "login", "description": "Log in with username/password. The session is persisted and reused on the next start." },
     { "name": "login_sso", "description": "Log in via the homeserver's SSO flow: opens a browser, waits for you to finish signing in." },
     { "name": "login_with_token", "description": "Log in with a pre-obtained access token, for headless/automated setups on an SSO/OAuth homeserver." },
-    { "name": "logout", "description": "Log out, invalidate the access token, and clear the saved session." },
+    { "name": "logout", "description": "Log out, invalidate the access token, and delete the saved session and local encryption store." },
     { "name": "whoami", "description": "Report the current login state (user id, device, homeserver, joined-room count, key-backup state)." },
     { "name": "sync", "description": "Run a single sync to refresh the local room list and state, and flush pending key-backup uploads." },
     { "name": "enable_key_backup", "description": "Set up a server-side key backup and return a new recovery key." },

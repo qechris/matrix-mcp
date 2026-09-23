@@ -397,7 +397,8 @@ impl MatrixServer {
 
     #[tool(
         description = "Log out of the current session, invalidating the access token and \
-        clearing the saved session so the next start requires logging in again.",
+        deleting the saved session and local encryption store, so the next start requires \
+        logging in again. Run this before uninstalling to leave nothing behind.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
