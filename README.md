@@ -267,6 +267,10 @@ A few practical notes:
 
 - The store directory holds your encryption keys — treat it like a credential
   and keep it private.
+- The store belongs to one device. `logout` deletes it along with the session
+  file, and a fresh login replaces whatever an earlier device left behind, so
+  a reinstall never trips over stale state. Logging in while already logged in
+  is refused; `logout` first to switch accounts.
 - You can only decrypt messages for which the device has the keys. Running the
   `sync` tool lets the device receive room keys (and `automatic-room-key-forwarding`
   requests missing ones); messages with no available key are returned with

@@ -15,6 +15,7 @@ use matrix_sdk::{
     encryption::{
         backups::BackupState,
         verification::{SasState, SasVerification, VerificationRequest, VerificationRequestState},
+        CryptoStoreError, OlmError,
     },
     media::{MediaFormat, MediaRequestParameters},
     room::{
@@ -29,6 +30,7 @@ use matrix_sdk::{
                 receipt::create_receipt::v3::ReceiptType,
                 room::{create_room, Visibility},
             },
+            error::ErrorKind,
             Direction,
         },
         assign,
@@ -205,6 +207,9 @@ impl MatrixManager {
             .or_else(|| self.default_homeserver.clone())
             .ok_or_else(|| anyhow!("no homeserver provided and MATRIX_HOMESERVER is not set"))?;
 
+        // A password login always mints a new device, so whatever is on disk
+        // belongs to some other device and can never be reused.
+        self.discard_state_for_new_device().await?;
         let client = self.build_client(&homeserver).await?;
         client
             .matrix_auth()
@@ -240,7 +245,7 @@ impl MatrixManager {
             .or_else(|| self.default_homeserver.clone())
             .ok_or_else(|| anyhow!("no homeserver provided and MATRIX_HOMESERVER is not set"))?;
 
-        let client = self.build_client(&homeserver).await?;
+        self.ensure_logged_out().await?;
         let user_id = Self::parse_user_id(user_id)?;
         let session = MatrixSession {
             meta: SessionMeta {
@@ -252,11 +257,30 @@ impl MatrixManager {
                 refresh_token: None,
             },
         };
-        client
+
+        // Unlike a password login, the device is known up front, so a store
+        // that already belongs to it is kept (along with its keys). Restoring
+        // makes no network call, so if the store belongs to a different
+        // device - state left behind by an earlier login or install - it is
+        // safe to discard it and try once more.
+        let mut client = self.build_client(&homeserver).await?;
+        let mut restored = client
             .matrix_auth()
-            .restore_session(session, RoomLoadSettings::default())
-            .await
-            .context("failed to load the provided session")?;
+            .restore_session(session.clone(), RoomLoadSettings::default())
+            .await;
+        if restored.as_ref().err().is_some_and(is_mismatched_account) {
+            tracing::warn!(
+                "local state belongs to a different device; discarding it before logging in"
+            );
+            drop(client);
+            self.clear_local_state().await;
+            client = self.build_client(&homeserver).await?;
+            restored = client
+                .matrix_auth()
+                .restore_session(session, RoomLoadSettings::default())
+                .await;
+        }
+        restored.context("failed to load the provided session")?;
 
         // Unlike a password login, restoring a session from a token makes no
         // network call, so nothing has verified the token yet - require the
@@ -280,6 +304,8 @@ impl MatrixManager {
             .map(str::to_owned)
             .or_else(|| self.default_homeserver.clone())
             .ok_or_else(|| anyhow!("no homeserver provided and MATRIX_HOMESERVER is not set"))?;
+        // Like a password login, an SSO login always mints a new device.
+        self.discard_state_for_new_device().await?;
         let client = self.build_client(&homeserver).await?;
 
         let sso_url: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
@@ -375,11 +401,44 @@ impl MatrixManager {
             serde_json::from_str(&data).context("parsing saved session file")?;
 
         let client = self.build_client(&persisted.homeserver).await?;
-        client
+        if let Err(e) = client
             .matrix_auth()
             .restore_session(persisted.session, RoomLoadSettings::default())
             .await
-            .context("restoring saved session")?;
+        {
+            if is_mismatched_account(&e) {
+                // The session file and the store belong to different devices,
+                // so neither can be trusted. Start clean rather than leave
+                // state behind that would also break the next login.
+                tracing::warn!(
+                    "saved session and local store belong to different devices; discarding both"
+                );
+                drop(client);
+                self.clear_local_state().await;
+                return Ok(false);
+            }
+            return Err(e).context("restoring saved session");
+        }
+
+        // Restoring makes no network call, so a session whose device was
+        // removed or logged out elsewhere - common after uninstalling and
+        // reinstalling - would otherwise be reported as logged in with every
+        // tool failing. Confirm the token still works. Only a definite
+        // "unknown token" discards the session: any other failure (e.g. the
+        // homeserver being unreachable) keeps it, so a transient network
+        // problem never logs anyone out.
+        if let Err(e) = client.whoami().await {
+            if matches!(e.client_api_error_kind(), Some(ErrorKind::UnknownToken(_))) {
+                tracing::warn!(
+                    "saved session's access token was revoked; discarding it - log in again"
+                );
+                drop(client);
+                self.clear_local_state().await;
+                return Ok(false);
+            }
+            tracing::warn!("could not verify the saved session, keeping it: {e:#}");
+        }
+
         let _ = client.sync_once(refresh_sync_settings()).await;
         *self.client.write().await = Some(client);
         Ok(true)
@@ -458,14 +517,94 @@ impl MatrixManager {
     }
 
     /// Log out of the current session: invalidate the access token server-side,
-    /// drop the in-memory client, and delete the persisted session file so
-    /// `try_restore()` doesn't try to reuse the now-invalid token on next start.
+    /// drop the in-memory client, and delete the persisted session file and
+    /// store. The server deletes the device on logout, so its crypto state is
+    /// dead weight - and left behind, it would make the next login fail.
     pub async fn logout(&self) -> Result<()> {
         let client = self.connected_client().await?;
-        client.logout().await.context("logout failed")?;
+        if let Err(e) = client.logout().await {
+            // A revoked token means the device is already gone server-side
+            // (e.g. removed from another client), which is what logout was
+            // for - finish the local cleanup rather than leave a dead session
+            // that can neither log out nor be replaced by a new login.
+            if !matches!(e.client_api_error_kind(), Some(ErrorKind::UnknownToken(_))) {
+                return Err(e).context("logout failed");
+            }
+            tracing::warn!("access token was already revoked; clearing the local session");
+        }
         *self.client.write().await = None;
-        let _ = tokio::fs::remove_file(&self.session_path).await;
+        // An in-progress verification belongs to the device being logged out.
+        *self.pending_verification.write().await = None;
+        *self.pending_sas.write().await = None;
+        drop(client);
+        self.clear_local_state().await;
         Ok(())
+    }
+
+    /// Fail if a session is live. Every login creates or adopts a device and
+    /// needs the local store to itself, so switching accounts goes through
+    /// `logout` first rather than silently replacing a working session.
+    async fn ensure_logged_out(&self) -> Result<()> {
+        if let Some(client) = self.client.read().await.as_ref() {
+            let who = client
+                .user_id()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "an existing account".to_string());
+            return Err(anyhow!(
+                "already logged in as {who} - use the `logout` tool first to switch accounts"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Prepare for a login that will mint a brand-new device (password or
+    /// SSO). With no live session, anything still on disk was left by an
+    /// earlier device - a previous login, or an install that was removed
+    /// without logging out - and its store would make this login fail with
+    /// "the account in the store doesn't match".
+    async fn discard_state_for_new_device(&self) -> Result<()> {
+        self.ensure_logged_out().await?;
+        self.clear_local_state().await;
+        Ok(())
+    }
+
+    /// Delete the persisted session file and the SQLite store.
+    ///
+    /// Only the files matrix-sdk itself creates are removed from the store
+    /// directory (which is then removed if it is left empty), never the whole
+    /// tree: `MATRIX_STORE_PATH` is user-configurable, and a blanket recursive
+    /// delete on a misconfigured path could take unrelated files with it.
+    async fn clear_local_state(&self) {
+        if let Err(e) = tokio::fs::remove_file(&self.session_path).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    "could not remove session file {}: {e}",
+                    self.session_path.display()
+                );
+            }
+        }
+
+        let mut entries = match tokio::fs::read_dir(&self.store_path).await {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                tracing::warn!("could not read store {}: {e}", self.store_path.display());
+                return;
+            }
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            // matrix-sdk-{state,crypto,event-cache,media}.sqlite3, plus their
+            // -wal / -shm / -journal companions.
+            if name.starts_with("matrix-sdk-") && name.contains(".sqlite3") {
+                if let Err(e) = tokio::fs::remove_file(entry.path()).await {
+                    tracing::warn!("could not remove {}: {e}", entry.path().display());
+                }
+            }
+        }
+        // Succeeds only if nothing else lives there.
+        let _ = tokio::fs::remove_dir(&self.store_path).await;
     }
 
     /// Run one `sync_once` with the given settings, bounded by [`SYNC_TIMEOUT`].
@@ -1689,6 +1828,26 @@ impl MatrixManager {
             .context("failed to join room")?;
         Ok(joined.room_id().to_string())
     }
+}
+
+/// Whether `e` means the crypto store holds a different device's account than
+/// the session being loaded - i.e. the store was left behind by another
+/// device and cannot be used for this one.
+fn is_mismatched_account(e: &matrix_sdk::Error) -> bool {
+    // Restoring a session surfaces it wrapped in an OlmError; other paths
+    // report the store error directly.
+    let store_error = match e {
+        matrix_sdk::Error::CryptoStoreError(inner) => Some(&**inner),
+        matrix_sdk::Error::OlmError(inner) => match &**inner {
+            OlmError::Store(inner) => Some(inner),
+            _ => None,
+        },
+        _ => None,
+    };
+    matches!(
+        store_error,
+        Some(CryptoStoreError::MismatchedAccount { .. })
+    )
 }
 
 /// Default location for the persisted session file.
