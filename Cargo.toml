@@ -1,6 +1,6 @@
 [package]
 name = "matrix-mcp"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "A Model Context Protocol (MCP) server for the Matrix chat protocol, built on the official Rust SDKs (rmcp + matrix-sdk)."
 license = "MIT"
