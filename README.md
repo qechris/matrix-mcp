@@ -121,9 +121,17 @@ verification — no recovery key needed:
    - **They don't match:** run `cancel_device_verification` and investigate;
      don't confirm.
 
-This requires the account to already have a cross-signing identity (set one
-up in another client first if it doesn't) and only verifies this device
+This requires the account to already have a cross-signing identity and only
+verifies this device
 against *your own* other sessions — see [Limitations](#limitations).
+
+A password `login` creates that identity automatically when the account has
+none, so a bot account used only through this server is cross-signed from the
+start. Sessions created with `login_with_token`, or before this was added, can
+run `bootstrap_cross_signing` (with the account password, and the recovery key
+to save the new keys to secret storage). Without an identity, other clients
+show every message from this device as "encrypted by a device not verified by
+its owner".
 
 If you'd rather not do the interactive dance (e.g. a headless deployment),
 `restore_key_backup` with a recovery key achieves the "read old history" half
@@ -142,6 +150,7 @@ without needing another session online — see
 | `sync`          | Run a single sync to refresh the local room list and state, and flush pending key-backup uploads. |
 | `enable_key_backup` | Set up a server-side key backup and return a new recovery key (for accounts that don't have one). |
 | `restore_key_backup` | Unlock the key backup with a recovery key, making messages sent before this device existed readable. |
+| `bootstrap_cross_signing` | Create a cross-signing identity for an account that has none and sign this device, so other clients stop flagging its messages. |
 | `download_room_keys` | Force-fetch a room's historical keys from the key backup. |
 | `start_device_verification` | Start interactive (emoji/SAS) verification of this device against your other, already-verified session. Returns emoji to compare, once ready. |
 | `continue_device_verification` | Continue an in-progress device verification, fetching the emoji once the other session has accepted. |

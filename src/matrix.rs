@@ -15,7 +15,7 @@ use matrix_sdk::{
     encryption::{
         backups::BackupState,
         verification::{SasState, SasVerification, VerificationRequest, VerificationRequestState},
-        CryptoStoreError, OlmError,
+        CryptoStoreError, EncryptionSettings, OlmError,
     },
     media::{MediaFormat, MediaRequestParameters},
     room::{
@@ -29,6 +29,7 @@ use matrix_sdk::{
                 profile::{AvatarUrl, DisplayName},
                 receipt::create_receipt::v3::ReceiptType,
                 room::{create_room, Visibility},
+                uiaa,
             },
             error::ErrorKind,
             Direction,
@@ -189,6 +190,16 @@ impl MatrixManager {
         Client::builder()
             .homeserver_url(homeserver)
             .sqlite_store(&self.store_path, None)
+            // Without a cross-signing identity, other clients can't tie this
+            // device to its owner and flag every message it sends ("encrypted
+            // by a device not verified by its owner"). With this set, a
+            // password login creates the identity using the login password
+            // for the server's auth challenge; it is a no-op when the account
+            // already has one.
+            .with_encryption_settings(EncryptionSettings {
+                auto_enable_cross_signing: true,
+                ..Default::default()
+            })
             .build()
             .await
             .with_context(|| format!("failed to build client for homeserver {homeserver}"))
@@ -718,6 +729,69 @@ impl MatrixManager {
             // `recover` succeeds even when it finds no usable backup version, so
             // say plainly whether historical keys can actually be fetched now.
             "key_backup_usable": backup_state == BackupState::Enabled,
+        }))
+    }
+
+    /// Create a cross-signing identity for an account that has none and sign
+    /// this device with it. This repairs sessions that logged in before
+    /// cross-signing was enabled automatically, or via a token, where no
+    /// password was available for the server's auth challenge. When a
+    /// recovery key is given, the new private keys are also stored in secret
+    /// storage so recovery is complete and future devices can import them.
+    pub async fn bootstrap_cross_signing(
+        &self,
+        password: Option<&str>,
+        recovery_key: Option<&str>,
+    ) -> Result<Value> {
+        let client = self.connected_client().await?;
+        let encryption = client.encryption();
+        let user_id = client
+            .user_id()
+            .ok_or_else(|| anyhow!("not logged in"))?
+            .to_owned();
+
+        // Only ever create an identity when the account has none: replacing an
+        // existing one would invalidate every verification other users made.
+        if let Err(e) = encryption.bootstrap_cross_signing_if_needed(None).await {
+            let response = e
+                .as_uiaa_response()
+                .ok_or_else(|| anyhow!("failed to set up cross-signing: {e}"))?;
+            let password = password.ok_or_else(|| {
+                anyhow!(
+                    "the homeserver requires the account password to upload cross-signing \
+                     keys - call again with `password`"
+                )
+            })?;
+            let mut auth = uiaa::Password::new(
+                uiaa::UserIdentifier::Matrix(uiaa::MatrixUserIdentifier::new(user_id.to_string())),
+                password.to_owned(),
+            );
+            auth.session = response.session.clone();
+            encryption
+                .bootstrap_cross_signing(Some(uiaa::AuthData::Password(auth)))
+                .await
+                .context("failed to upload cross-signing keys - check the password")?;
+        }
+
+        if let Some(recovery_key) = recovery_key {
+            encryption
+                .secret_storage()
+                .open_secret_store(recovery_key)
+                .await
+                .context("failed to open secret storage - check the recovery key")?
+                .export_secrets()
+                .await
+                .context("failed to store the cross-signing keys in secret storage")?;
+        }
+        let _ = client.sync_once(refresh_sync_settings()).await;
+
+        Ok(json!({
+            "cross_signing_complete": encryption
+                .cross_signing_status()
+                .await
+                .is_some_and(|status| status.is_complete()),
+            "device_verified": Self::own_device_cross_signed(&client).await,
+            "recovery_state": format!("{:?}", encryption.recovery().state()),
         }))
     }
 

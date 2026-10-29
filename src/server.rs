@@ -81,6 +81,20 @@ pub struct RestoreKeyBackupArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BootstrapCrossSigningArgs {
+    #[schemars(
+        description = "The account password. Needed when the homeserver asks for it before \
+        accepting new cross-signing keys, which most do."
+    )]
+    pub password: Option<String>,
+    #[schemars(
+        description = "The account's recovery key. When given, the new cross-signing keys are \
+        also saved to secret storage so other devices can import them."
+    )]
+    pub recovery_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DownloadRoomKeysArgs {
     #[schemars(description = "Room id to fetch historical keys for, e.g. !abc123:matrix.org.")]
     pub room_id: String,
@@ -458,6 +472,30 @@ impl MatrixServer {
         let result = self
             .matrix
             .restore_key_backup(&args.recovery_key)
+            .await
+            .map_err(err)?;
+        json_result(result)
+    }
+
+    #[tool(
+        description = "Set up cross-signing for an account that has none and sign this device \
+        with it. Without it, other clients warn that messages were \"encrypted by a device not \
+        verified by its owner\". Password logins do this automatically; use this for sessions \
+        created by token or before that was added. Does nothing to an account that already \
+        has a cross-signing identity. Check `whoami` (`device_verified`) first.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    async fn bootstrap_cross_signing(
+        &self,
+        Parameters(args): Parameters<BootstrapCrossSigningArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let result = self
+            .matrix
+            .bootstrap_cross_signing(args.password.as_deref(), args.recovery_key.as_deref())
             .await
             .map_err(err)?;
         json_result(result)
