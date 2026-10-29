@@ -63,6 +63,10 @@ async fn main() -> Result<()> {
 
     let manager = Arc::new(manager);
 
+    if let Some(interval) = auto_join_interval() {
+        spawn_auto_join(manager.clone(), interval);
+    }
+
     match transport_kind() {
         Transport::Stdio => serve_stdio(manager).await,
         Transport::Http => serve_http(manager).await,
@@ -83,6 +87,39 @@ fn transport_kind() -> Transport {
         "http" | "sse" | "streamable-http" | "streamable_http" => Transport::Http,
         _ => Transport::Stdio,
     }
+}
+
+/// `MATRIX_AUTO_JOIN` turns on the background auto-join loop: "true"/"1"
+/// runs it every 60 seconds, a number sets the interval in seconds.
+fn auto_join_interval() -> Option<std::time::Duration> {
+    let value = std::env::var("MATRIX_AUTO_JOIN").ok()?;
+    let secs = match value.trim().to_ascii_lowercase().as_str() {
+        "" | "0" | "false" | "no" | "off" => return None,
+        "1" | "true" | "yes" | "on" => 60,
+        other => other.parse().ok().filter(|s| *s > 0)?,
+    };
+    Some(std::time::Duration::from_secs(secs))
+}
+
+/// Periodically accept invites and join rooms in this account's spaces.
+fn spawn_auto_join(manager: Arc<MatrixManager>, interval: std::time::Duration) {
+    tracing::info!("auto-join enabled, every {}s", interval.as_secs());
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        loop {
+            ticker.tick().await;
+            match manager.auto_join().await {
+                Ok(result) => {
+                    let joined = result["joined"].as_array().map_or(0, Vec::len);
+                    if joined > 0 {
+                        tracing::info!("auto-join: {result}");
+                    }
+                }
+                // Not logged in yet, or the server is briefly unreachable.
+                Err(e) => tracing::debug!("auto-join skipped: {e:#}"),
+            }
+        }
+    });
 }
 
 /// Serve over stdio (default).

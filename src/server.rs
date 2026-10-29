@@ -188,6 +188,12 @@ pub struct JoinRoomArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetSpaceChildrenArgs {
+    #[schemars(description = "Room id of the space, e.g. !abc123:matrix.org.")]
+    pub space_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreateRoomArgs {
     #[schemars(description = "Room name.")]
     pub name: Option<String>,
@@ -763,6 +769,49 @@ impl MatrixServer {
     ) -> Result<CallToolResult, ErrorData> {
         let room_id = self.matrix.join_room(&args.room).await.map_err(err)?;
         json_result(serde_json::json!({ "joined": true, "room_id": room_id }))
+    }
+
+    #[tool(
+        description = "List rooms this account has been invited to but not joined yet, with \
+        who sent each invite. Accept one with join_room.",
+        annotations(read_only_hint = true)
+    )]
+    async fn list_invites(&self) -> Result<CallToolResult, ErrorData> {
+        let invites = self.matrix.list_invites().await.map_err(err)?;
+        json_result(invites)
+    }
+
+    #[tool(
+        description = "List every room inside a space (including nested spaces), whether or \
+        not this account has joined them, with each room's join rule and a joined flag. \
+        list_rooms shows is_space=true for spaces. Join a listed room with join_room.",
+        annotations(read_only_hint = true)
+    )]
+    async fn get_space_children(
+        &self,
+        Parameters(args): Parameters<GetSpaceChildrenArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let rooms = self
+            .matrix
+            .get_space_children(&args.space_id)
+            .await
+            .map_err(err)?;
+        json_result(rooms)
+    }
+
+    #[tool(
+        description = "Accept every pending invite and join every room inside the spaces this \
+        account belongs to. Also runs automatically in the background when the server is \
+        started with MATRIX_AUTO_JOIN set.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    async fn auto_join(&self) -> Result<CallToolResult, ErrorData> {
+        let result = self.matrix.auto_join().await.map_err(err)?;
+        json_result(result)
     }
 
     #[tool(

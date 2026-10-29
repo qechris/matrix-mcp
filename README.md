@@ -147,7 +147,10 @@ without needing another session online — see
 | `continue_device_verification` | Continue an in-progress device verification, fetching the emoji once the other session has accepted. |
 | `confirm_device_verification` | Confirm the emoji match, completing device verification and cross-signing. |
 | `cancel_device_verification` | Abort an in-progress device verification. |
-| `list_rooms`    | List joined rooms with id, name, topic, and encryption state. |
+| `list_rooms`    | List joined rooms with id, name, topic, encryption state, and whether each is a space. |
+| `list_invites`  | List rooms this account has been invited to but not joined, with the inviter. |
+| `get_space_children` | List every room inside a space (including nested spaces), joined or not, with join rule and a `joined` flag. |
+| `auto_join`     | Accept all pending invites and join every room inside the spaces this account belongs to. |
 | `send_message`  | Send a text message to a room (plain text or Markdown), optionally as a rich reply — replies to a message in a thread stay in that thread. |
 | `edit_message`  | Edit a previously-sent message (sender only). |
 | `redact_event`  | Redact (delete) a message, or a reaction to un-react. |
@@ -186,6 +189,7 @@ can also authenticate at runtime with the `login` tool.
 | `MATRIX_SESSION_FILE`| Path to persist the session (default: `$XDG_STATE_HOME/matrix-mcp/session.json`, falling back to `~/.local/state/matrix-mcp/session.json`). |
 | `MATRIX_STORE_PATH`  | Directory for the SQLite crypto/state store, where E2EE keys and room state persist (default: a `store` directory next to the session file). |
 | `MATRIX_VERIFICATION_TIMEOUT` | Seconds each interactive device-verification poll (`start_device_verification`/`continue_device_verification`) waits for the other session before returning `pending` (default `35`). |
+| `MATRIX_AUTO_JOIN`   | Run `auto_join` in the background: `true` checks every 60 seconds, a number sets the interval in seconds. Useful for bot accounts that should be in every room they are invited to or that their spaces contain. Off by default. |
 | `MATRIX_MCP_TRANSPORT` | Transport to serve: `stdio` (default) or `http`/`sse`. |
 | `MATRIX_MCP_ADDRESS` | Bind address for the HTTP/SSE transport (default `127.0.0.1:8000`). |
 | `MATRIX_MCP_PATH`    | URL path for the HTTP/SSE endpoint (default `/mcp`). |

@@ -29,6 +29,7 @@ use matrix_sdk::{
                 profile::{AvatarUrl, DisplayName},
                 receipt::create_receipt::v3::ReceiptType,
                 room::{create_room, Visibility},
+                space::{get_hierarchy, SpaceHierarchyRoomsChunk},
             },
             error::ErrorKind,
             Direction,
@@ -47,10 +48,11 @@ use matrix_sdk::{
             },
             AnySyncMessageLikeEvent, AnySyncTimelineEvent, InitialStateEvent, SyncMessageLikeEvent,
         },
+        room::RoomType,
         EventId, OwnedEventId, OwnedUserId, RoomId, RoomOrAliasId, UserId,
     },
     store::RoomLoadSettings,
-    Client, Room, RoomMemberships, SessionMeta, SessionTokens,
+    Client, Room, RoomMemberships, RoomState, SessionMeta, SessionTokens,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1090,6 +1092,7 @@ impl MatrixManager {
                 "room_id": room.room_id().to_string(),
                 "name": name,
                 "topic": room.topic(),
+                "is_space": room.is_space(),
                 "encryption": format!("{:?}", room.encryption_state()),
             }));
         }
@@ -1827,6 +1830,141 @@ impl MatrixManager {
             .await
             .context("failed to join room")?;
         Ok(joined.room_id().to_string())
+    }
+
+    /// List rooms the account has been invited to but not yet joined.
+    pub async fn list_invites(&self) -> Result<Value> {
+        let client = self.connected_client().await?;
+        let _ = self.sync().await;
+
+        let mut invites = Vec::new();
+        for room in client.invited_rooms() {
+            let inviter = room
+                .invite_details()
+                .await
+                .ok()
+                .and_then(|d| d.inviter)
+                .map(|m| m.user_id().to_string());
+            invites.push(json!({
+                "room_id": room.room_id().to_string(),
+                "name": room.name(),
+                "is_space": room.is_space(),
+                "inviter": inviter,
+            }));
+        }
+        Ok(json!({ "count": invites.len(), "invites": invites }))
+    }
+
+    /// Walk a space's hierarchy and return every room in it (the space itself
+    /// first), flagging which ones this account has already joined.
+    pub async fn get_space_children(&self, space_id: &str) -> Result<Value> {
+        let client = self.connected_client().await?;
+        let rooms = Self::space_hierarchy(&client, space_id).await?;
+        let rooms: Vec<Value> = rooms
+            .iter()
+            .map(|chunk| {
+                let s = &chunk.summary;
+                json!({
+                    "room_id": s.room_id.to_string(),
+                    "name": s.name,
+                    "topic": s.topic,
+                    "is_space": s.room_type == Some(RoomType::Space),
+                    "join_rule": s.join_rule.as_str(),
+                    "joined_members": u64::from(s.num_joined_members),
+                    "joined": client
+                        .get_room(&s.room_id)
+                        .is_some_and(|r| r.state() == RoomState::Joined),
+                })
+            })
+            .collect();
+        Ok(json!({ "space_id": space_id, "count": rooms.len(), "rooms": rooms }))
+    }
+
+    /// Fetch every page of `/hierarchy` for a space.
+    async fn space_hierarchy(
+        client: &Client,
+        space_id: &str,
+    ) -> Result<Vec<SpaceHierarchyRoomsChunk>> {
+        let space_id =
+            RoomId::parse(space_id).map_err(|e| anyhow!("invalid room id '{space_id}': {e}"))?;
+        let mut rooms = Vec::new();
+        let mut from = None;
+        loop {
+            let mut request = get_hierarchy::v1::Request::new(space_id.clone());
+            request.from = from;
+            let response = client
+                .send(request)
+                .await
+                .context("failed to fetch space hierarchy")?;
+            rooms.extend(response.rooms);
+            match response.next_batch {
+                Some(next) => from = Some(next),
+                None => break,
+            }
+        }
+        Ok(rooms)
+    }
+
+    /// Accept every pending invite, then join every room inside the spaces
+    /// this account belongs to. Failures are reported per room rather than
+    /// aborting the pass, since a room may simply not allow us in.
+    pub async fn auto_join(&self) -> Result<Value> {
+        let client = self.connected_client().await?;
+        let _ = self.sync().await;
+
+        let mut joined = Vec::new();
+        let mut failed = Vec::new();
+
+        for room in client.invited_rooms() {
+            let id = room.room_id().to_string();
+            match room.join().await {
+                Ok(()) => joined.push(id),
+                Err(e) => failed.push(json!({ "room_id": id, "error": e.to_string() })),
+            }
+        }
+
+        // Spaces can nest, so keep going until a pass joins nothing new.
+        loop {
+            let mut joined_this_pass = false;
+            let spaces: Vec<Room> = client
+                .joined_rooms()
+                .into_iter()
+                .filter(|room| room.is_space())
+                .collect();
+            for space in spaces {
+                let chunks = match Self::space_hierarchy(&client, space.room_id().as_str()).await {
+                    Ok(chunks) => chunks,
+                    Err(e) => {
+                        failed.push(json!({ "room_id": space.room_id().to_string(), "error": format!("{e:#}") }));
+                        continue;
+                    }
+                };
+                for chunk in chunks {
+                    let room_id = chunk.summary.room_id;
+                    let already = client
+                        .get_room(&room_id)
+                        .is_some_and(|r| r.state() == RoomState::Joined);
+                    if already || failed.iter().any(|f| f["room_id"] == room_id.as_str()) {
+                        continue;
+                    }
+                    match client.join_room_by_id(&room_id).await {
+                        Ok(_) => {
+                            joined.push(room_id.to_string());
+                            joined_this_pass = true;
+                        }
+                        Err(e) => failed.push(
+                            json!({ "room_id": room_id.to_string(), "error": e.to_string() }),
+                        ),
+                    }
+                }
+            }
+            if !joined_this_pass {
+                break;
+            }
+            let _ = self.sync().await;
+        }
+
+        Ok(json!({ "joined": joined, "failed": failed }))
     }
 }
 
